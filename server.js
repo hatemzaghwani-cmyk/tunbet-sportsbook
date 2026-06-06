@@ -1,10 +1,139 @@
 const http=require('http'),https=require('https'),cron=require('node-cron');
-const PORT=process.env.PORT||4000,SU=process.env.SUPA_URL,SK=process.env.SUPA_KEY;
+const PORT=process.env.PORT||4000;
+const SU=process.env.SUPA_URL||"https://cjzjrnagpsdmolvbkhnu.supabase.co";
+const SK=process.env.SUPA_KEY||"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImNqempybmFncHNkbW9sdmJraG51Iiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc4MDM0ODY4NCwiZXhwIjoyMDk1OTI0Njg0fQ.TmowEatc4g2xpD-GT0r-jofX1zCtXjTD-s4LF7JSs6o";
+const ORO_API="https://und7br.sxvwlkohlv.com/api/v2";
+const ORO_CLIENT_ID="Hatem1_TND";
+const ORO_CLIENT_SECRET="JdYysA2TS7K3xzIYJoOlRn2z9i9XWk57";
+const ORO_SEAMLESS_SECRET=process.env.ORO_SEAMLESS_SECRET||"tunbet_seamless_2026";
+
 const ESPN="https://site.api.espn.com/apis/site/v2/sports";
 const LG=[{s:"soccer",id:"eng.1",n:"Premier League"},{s:"soccer",id:"esp.1",n:"La Liga"},{s:"soccer",id:"ger.1",n:"Bundesliga"},{s:"soccer",id:"ita.1",n:"Serie A"},{s:"soccer",id:"fra.1",n:"Ligue 1"},{s:"soccer",id:"uefa.champions",n:"Champions League"},{s:"soccer",id:"usa.1",n:"MLS"},{s:"soccer",id:"bra.1",n:"Brasileirão"},{s:"soccer",id:"tur.1",n:"Süper Lig"},{s:"soccer",id:"por.1",n:"Liga Portugal"},{s:"soccer",id:"fifa.worldq.conmebol",n:"WCQ CONMEBOL"},{s:"soccer",id:"fifa.worldq.uefa",n:"WCQ UEFA"},{s:"basketball",id:"nba",n:"NBA"},{s:"basketball",id:"wnba",n:"WNBA"},{s:"football",id:"nfl",n:"NFL"},{s:"baseball",id:"mlb",n:"MLB"},{s:"hockey",id:"nhl",n:"NHL"},{s:"mma",id:"ufc",n:"UFC"},{s:"tennis",id:"atp",n:"ATP"},{s:"tennis",id:"wta",n:"WTA"}];
 const IC={soccer:"⚽",basketball:"🏀",football:"🏈",baseball:"⚾",hockey:"🏒",mma:"🥊",tennis:"🎾"};
+
 function get(u){return new Promise((y,n)=>{https.get(u,{headers:{'User-Agent':'TB'}},r=>{let d='';r.on('data',c=>d+=c);r.on('end',()=>{try{y(JSON.parse(d))}catch{y(null)}})}).on('error',n)})}
-function supa(m,p,b){return new Promise((y,n)=>{const u=new URL(SU+'/rest/v1'+p);const r=https.request({hostname:u.hostname,path:u.pathname+u.search,method:m,headers:{apikey:SK,Authorization:'Bearer '+SK,'Content-Type':'application/json',Prefer:'return=minimal,resolution=merge-duplicates'}},s=>{let d='';s.on('data',c=>d+=c);s.on('end',()=>{try{y(JSON.parse(d))}catch{y(d)}})});r.on('error',n);if(b)r.write(JSON.stringify(b));r.end()})}
+function supa(m,p,b){return new Promise((y,n)=>{const u=new URL(SU+'/rest/v1'+p);const r=https.request({hostname:u.hostname,path:u.pathname+u.search,method:m,headers:{apikey:SK,Authorization:'Bearer '+SK,'Content-Type':'application/json',Prefer:'return=representation'}},s=>{let d='';s.on('data',c=>d+=c);s.on('end',()=>{try{y(JSON.parse(d))}catch{y(d)}})});r.on('error',n);if(b)r.write(JSON.stringify(b));r.end()})}
+
+// ─── Body Parser ───
+function parseBody(req){
+  return new Promise((resolve)=>{
+    let body='';
+    req.on('data',chunk=>body+=chunk);
+    req.on('end',()=>{
+      try{resolve(JSON.parse(body))}
+      catch(e){
+        try{
+          // Handle URL-encoded
+          const params={};
+          body.split('&').forEach(p=>{const[k,v]=p.split('=');params[k]=decodeURIComponent(v)});
+          resolve(params);
+        }catch(e2){resolve({});}
+      }
+    });
+    req.on('error',()=>resolve({}));
+  });
+}
+
+// ═══════════════════════════════════════════════════════
+// OROPLAY SEAMLESS WALLET — Balance in Supabase ONLY
+// ═══════════════════════════════════════════════════════
+
+async function getBalance(username){
+  if(!username||typeof username!=='string') return {success:false,error:"Missing username"};
+  const userId=username.replace('tb_','').trim();
+  if(!userId||isNaN(userId)) return {success:false,error:"Invalid user: "+username};
+  
+  const users=await supa('GET',`/users?id=eq.${userId}&select=balance`);
+  if(!Array.isArray(users)||!users.length) return {success:false,error:"User not found",userId};
+  
+  const balance=parseFloat(users[0].balance||0);
+  console.log(`💰 Balance: user=${userId}, balance=${balance}`);
+  return {success:true,balance:balance,userId};
+}
+
+async function deduct(username,amount,txId,gameCode){
+  if(!username||typeof username!=='string') return {success:false,error:"Missing username"};
+  const userId=username.replace('tb_','').trim();
+  if(!userId||isNaN(userId)) return {success:false,error:"Invalid user"};
+  if(!amount||amount<=0) return {success:false,error:"Invalid amount"};
+  
+  const users=await supa('GET',`/users?id=eq.${userId}&select=balance`);
+  if(!Array.isArray(users)||!users.length) return {success:false,error:"User not found"};
+  
+  const currentBal=parseFloat(users[0].balance||0);
+  if(currentBal<amount) return {success:false,error:"Insufficient balance",balance:currentBal};
+  
+  const newBal=Math.round((currentBal-amount)*100)/100;
+  await supa('PATCH',`/users?id=eq.${userId}`,{balance:newBal});
+  await supa('POST','/transactions',{
+    user_id:parseInt(userId),type:'oro_bet',amount:-amount,
+    balance_before:currentBal,balance_after:newBal,
+    description:`OroPlay bet: ${gameCode||'unknown'} tx:${txId||'none'}`
+  });
+  console.log(`📉 Deduct: user=${userId}, -${amount} TND, bal: ${currentBal}→${newBal}`);
+  return {success:true,balance:newBal,txId};
+}
+
+async function credit(username,amount,txId,gameCode){
+  if(!username||typeof username!=='string') return {success:false,error:"Missing username"};
+  const userId=username.replace('tb_','').trim();
+  if(!userId||isNaN(userId)) return {success:false,error:"Invalid user"};
+  if(!amount||amount<=0) return {success:false,error:"Invalid amount"};
+  
+  const users=await supa('GET',`/users?id=eq.${userId}&select=balance`);
+  if(!Array.isArray(users)||!users.length) return {success:false,error:"User not found"};
+  
+  const currentBal=parseFloat(users[0].balance||0);
+  const newBal=Math.round((currentBal+amount)*100)/100;
+  await supa('PATCH',`/users?id=eq.${userId}`,{balance:newBal});
+  await supa('POST','/transactions',{
+    user_id:parseInt(userId),type:'oro_win',amount:amount,
+    balance_before:currentBal,balance_after:newBal,
+    description:`OroPlay win: ${gameCode||'unknown'} tx:${txId||'none'}`
+  });
+  console.log(`📈 Credit: user=${userId}, +${amount} TND, bal: ${currentBal}→${newBal}`);
+  return {success:true,balance:newBal,txId};
+}
+
+// ═══════════════════════════════════════════════════════
+// OroPlay Auth & Launch
+// ═══════════════════════════════════════════════════════
+
+let oroToken=null,oroExp=0;
+async function getOroToken(){
+  if(oroToken&&Date.now()<oroExp) return oroToken;
+  return new Promise((y,n)=>{
+    const d=JSON.stringify({clientId:ORO_CLIENT_ID,clientSecret:ORO_CLIENT_SECRET});
+    const u=new URL(ORO_API+'/auth/createtoken');
+    const r=https.request({hostname:u.hostname,path:u.pathname,method:'POST',headers:{'Content-Type':'application/json','Content-Length':Buffer.byteLength(d)}},s=>{let b='';s.on('data',c=>b+=c);s.on('end',()=>{try{const j=JSON.parse(b);if(j.token){oroToken=j.token;oroExp=Date.now()+(j.expiration||3600)*1000;}y(j)}catch(e){n(e)}})});
+    r.on('error',n);r.write(d);r.end();
+  });
+}
+
+async function oroApiCall(path,method,body){
+  const token=await getOroToken();
+  return new Promise((y,n)=>{
+    const d=JSON.stringify(body||{});
+    const u=new URL(ORO_API+path);
+    const r=https.request({hostname:u.hostname,path:u.pathname+u.search,method:method,headers:{'Content-Type':'application/json','Content-Length':Buffer.byteLength(d),'Authorization':'Bearer '+token}},s=>{let b='';s.on('data',c=>b+=c);s.on('end',()=>{try{y(JSON.parse(b))}catch(e){n(e)}})});
+    r.on('error',n);r.write(d);r.end();
+  });
+}
+
+async function oroCreateUser(userCode){
+  try{return await oroApiCall('/user/create','POST',{userCode})}
+  catch(e){console.error('OroCreateUser err:',e.message);return{success:false,error:e.message}}
+}
+
+async function oroLaunchGame(userCode,gameCode,vendorCode='slot-amatic',language='en'){
+  await oroCreateUser(userCode);
+  return oroApiCall('/game/launch-url','POST',{vendorCode,gameCode,userCode,language,lobbyUrl:'https://tunbet.surge.sh'});
+}
+
+// ═══════════════════════════════════════════════════════
+// Sports Odds
+// ═══════════════════════════════════════════════════════
+
 const a2d=a=>!a?0:a>0?+(a/100+1).toFixed(2):+(100/Math.abs(a)+1).toFixed(2);
 const v=(o,s)=>+(Math.max(1.01,o*(1+Math.sin(s+Date.now()/30000)*.02))).toFixed(2);
 
@@ -39,29 +168,24 @@ async function feed(){
       const hS=+h.score||0,aS=+a.score||0,id=e.id;
       const prev=prevSc[id];const goal=prev&&(prev.h!==hS||prev.a!==aS);
       prevSc[id]={h:hS,a:aS};
-      if(goal){suspended[id]=Date.now();console.log(`⚽ GOAL! ${h.team.displayName} ${hS}-${aS} ${a.team.displayName}`);}
+      if(goal){suspended[id]=Date.now();}
       const isSusp=suspended[id]&&(Date.now()-suspended[id]<30000);
       const od=(c.odds||[])[0]||null;
       const hR=+(h.curatedRank?.current||h.order||5),aR=+(a.curatedRank?.current||a.order||5);
       const m=(!fin&&!isSusp)?mkts(l.s,h.team.shortDisplayName||h.team.displayName,a.team.shortDisplayName||a.team.displayName,od,hR,aR):null;
       all.push({id,league:`${IC[l.s]||'🏅'} ${l.n}`,sport:l.s,home:h.team.displayName,away:a.team.displayName,homeLogo:h.team.logo||'',awayLogo:a.team.logo||'',date:e.date,status:fin?'finished':live?'live':'upcoming',clock:e.status?.displayClock||'',period:e.status?.type?.shortDetail||'',homeScore:hS,awayScore:aS,suspended:isSusp,hasRealOdds:!!od,markets:m});
-      // Auto-settle finished matches
       if(fin&&prev&&!prev.settled){prev.settled=true;settleBets(id,hS,aS,l.s).catch(()=>{});}
     }}catch(x){console.error(l.n,x.message)}}
   all.sort((a,b)=>(a.status==='live'?0:a.status==='upcoming'?1:2)-(b.status==='live'?0:b.status==='upcoming'?1:2)||new Date(a.date)-new Date(b.date));
   cache=all;lastT=Date.now();
-  console.log(`  ${all.length} matches, ${all.filter(m=>m.status==='live').length} live, ${all.filter(m=>m.status==='finished').length} finished`);
 }
 
-// AUTO SETTLE BETS
 async function settleBets(eventId,hS,aS,sport){
-  console.log(`  Settling bets for ${eventId} (${hS}-${aS})`);
   const bets=await supa('GET',`/sports_bets?event_id=eq.${eventId}&status=eq.pending&select=*`);
   if(!Array.isArray(bets)||!bets.length)return;
   for(const b of bets){
     const sel=b.selection,mk=b.sport||'';
     let won=false;
-    // Determine win based on market and selection
     if(mk==='1X2'){won=(sel==='1'&&hS>aS)||(sel==='X'&&hS===aS)||(sel==='2'&&hS<aS)}
     else if(mk==='O/U 2.5'){won=(sel==='Over'&&hS+aS>2.5)||(sel==='Under'&&hS+aS<2.5)}
     else if(mk==='O/U 1.5'){won=(sel==='Over'&&hS+aS>1.5)||(sel==='Under'&&hS+aS<1.5)}
@@ -75,65 +199,126 @@ async function settleBets(eventId,hS,aS,sport){
       if(Array.isArray(users)&&users[0]){
         const payout=b.potential_win;
         await supa('POST','/rpc/update_balance',{p_user_id:b.user_id,p_action:'add',p_amount:payout});
-        await supa('POST','/transactions',{user_id:b.user_id,type:'win',amount:payout,balance_before:+users[0].balance,balance_after:+users[0].balance+payout,description:`Won: ${b.event_name} | ${b.selection_name}`});
-        console.log(`    💰 User ${b.user_id} won ${payout} TND`);
+        await supa('POST','/transactions',{user_id:b.user_id,type:'win',amount:payout,balance_before:+users[0].balance,balance_after:+users[0].balance+payout,description:`Won: ${b.event_name}`});
       }
     }
   }
 }
 
-// VALIDATE & PLACE BET (anti-cheat)
 async function placeBet(userId,eventId,market,selection,odds,stake){
   const m=cache.find(x=>x.id===eventId);
   if(!m)return{error:'Match not found'};
   if(m.status==='finished')return{error:'Match finished'};
-  if(m.suspended)return{error:'Markets suspended (goal scored) - wait 30s'};
+  if(m.suspended)return{error:'Markets suspended'};
   if(!m.markets)return{error:'Markets closed'};
-  // Verify odds from SERVER (not from client)
   const mkt=m.markets[market];
-  if(!mkt)return{error:'Market not found: '+market};
+  if(!mkt)return{error:'Market not found'};
   let serverOdds=mkt[selection];
-  if(!serverOdds)return{error:'Selection not found: '+selection};
-  if(Math.abs(serverOdds-odds)/odds>0.01)return{error:'Odds changed',currentOdds:serverOdds,yourOdds:odds};
-  // Check balance
+  if(!serverOdds)return{error:'Selection not found'};
+  if(Math.abs(serverOdds-odds)/odds>0.01)return{error:'Odds changed',currentOdds:serverOdds};
   const users=await supa('GET',`/users?id=eq.${userId}&select=balance`);
   if(!Array.isArray(users)||!users.length)return{error:'User not found'};
   const bal=+users[0].balance;
   if(bal<stake)return{error:'Insufficient balance',balance:bal};
-  if(stake<0.5)return{error:'Minimum bet 0.50 TND'};
-  if(stake>5000)return{error:'Maximum bet 5000 TND'};
-  // LIVE BET DELAY: 5 seconds anti-courtsiding
+  if(stake<0.5)return{error:'Min bet 0.50 TND'};
+  if(stake>5000)return{error:'Max bet 5000 TND'};
   if(m.status==='live'){
     await new Promise(r=>setTimeout(r,5000));
-    // Re-check after delay: score might have changed
     const fresh=cache.find(x=>x.id===eventId);
-    if(!fresh)return{error:'Match not found after delay'};
-    if(fresh.suspended)return{error:'Goal scored during delay - bet rejected'};
-    if(fresh.status==='finished')return{error:'Match finished during delay'};
-    // Re-verify odds after delay
-    if(fresh.markets){const fmk=fresh.markets[market];if(fmk){const fOdds=fmk[selection];if(fOdds&&Math.abs(fOdds-serverOdds)/serverOdds>0.01)return{error:'Odds changed during delay',currentOdds:fOdds}}}
+    if(!fresh||fresh.suspended||fresh.status==='finished')return{error:'Match changed'};
     serverOdds=fresh.markets?.[market]?.[selection]||serverOdds;
   }
-  // ATOMIC: deduct + record
   await supa('POST','/rpc/update_balance',{p_user_id:userId,p_action:'withdraw',p_amount:stake});
   await supa('POST','/sports_bets',{user_id:userId,event_id:eventId,event_name:`${m.home} vs ${m.away}`,sport:market,league:m.league,selection,selection_name:`${market}: ${selection}`,odds:serverOdds,stake,potential_win:+(stake*serverOdds).toFixed(2),status:'pending'});
-  await supa('POST','/transactions',{user_id:userId,type:'bet',amount:-stake,balance_before:bal,balance_after:bal-stake,description:`${m.home} vs ${m.away} | ${market}: ${selection} @${serverOdds}`});
+  await supa('POST','/transactions',{user_id:userId,type:'bet',amount:-stake,balance_before:bal,balance_after:bal-stake,description:`${m.home} vs ${m.away} | ${market}: ${selection}`});
   return{success:true,odds:serverOdds,potentialWin:+(stake*serverOdds).toFixed(2),newBalance:+(bal-stake).toFixed(2)};
 }
 
-const CO={'Access-Control-Allow-Origin':'*','Access-Control-Allow-Methods':'GET,POST,OPTIONS','Access-Control-Allow-Headers':'Content-Type','Content-Type':'application/json'};
-http.createServer(async(req,res)=>{
+// ═══════════════════════════════════════════════════════
+// HTTP Server
+// ═══════════════════════════════════════════════════════
+
+const CO={
+  'Access-Control-Allow-Origin':'*',
+  'Access-Control-Allow-Methods':'GET,POST,OPTIONS',
+  'Access-Control-Allow-Headers':'Content-Type,Authorization,X-Oroplay-Secret',
+  'Content-Type':'application/json'
+};
+
+const server=http.createServer(async(req,res)=>{
   if(req.method==='OPTIONS'){res.writeHead(204,CO);return res.end()}
+  
+  const body=await parseBody(req);
   const p=new URL(req.url,`http://localhost:${PORT}`).pathname;
-  let body={};if(req.method==='POST')body=await new Promise(r=>{let d='';req.on('data',c=>d+=c);req.on('end',()=>{try{r(JSON.parse(d))}catch{r({})}})});
-  try{let R;
-    if(p==='/api/matches'){if(Date.now()-lastT>60000)await feed();R={matches:cache.filter(m=>m.status!=='finished'),count:cache.length,live:cache.filter(m=>m.status==='live').length,ts:new Date(lastT).toISOString()}}
-    else if(p==='/api/bet'&&req.method==='POST'){const{userId,eventId,market,selection,odds,stake}=body;R=(!userId||!eventId)?{error:'Missing fields'}:await placeBet(userId,eventId,market,selection,odds,+stake)}
-    else if(p==='/api/mybets'&&req.method==='POST'){const{userId}=body;R=await supa('GET',`/sports_bets?user_id=eq.${userId}&select=*&order=id.desc&limit=50`)}
-    else if(p==='/api/status'){R={ok:1,m:cache.length,live:cache.filter(m=>m.status==='live').length,up:process.uptime()|0}}
-    else R={svc:'TunBet Sportsbook v3'};
-    res.writeHead(200,CO);res.end(JSON.stringify(R))
-  }catch(e){res.writeHead(500,CO);res.end(JSON.stringify({error:e.message}))}
-}).listen(PORT,()=>{console.log('Sportsbook v3 on :'+PORT);feed()});
+  
+  try{
+    let R;
+    
+    // ── Seamless Wallet (called by OroPlay servers) ──
+    if(p==='/api/wallet/balance'){
+      const secret=req.headers['x-oroplay-secret']||body.secret||'';
+      if(secret&&secret!==ORO_SEAMLESS_SECRET){
+        R={success:false,error:"Unauthorized"};
+      } else {
+        R=await getBalance(body.username);
+      }
+    }
+    else if(p==='/api/wallet/deduct'){
+      const secret=req.headers['x-oroplay-secret']||body.secret||'';
+      if(secret&&secret!==ORO_SEAMLESS_SECRET){
+        R={success:false,error:"Unauthorized"};
+      } else {
+        R=await deduct(body.username,body.amount,body.txId,body.gameCode);
+      }
+    }
+    else if(p==='/api/wallet/credit'){
+      const secret=req.headers['x-oroplay-secret']||body.secret||'';
+      if(secret&&secret!==ORO_SEAMLESS_SECRET){
+        R={success:false,error:"Unauthorized"};
+      } else {
+        R=await credit(body.username,body.amount,body.txId,body.gameCode);
+      }
+    }
+    else if(p==='/api/wallet/session-end'){
+      R={success:true,message:"Session closed"};
+    }
+    
+    // ── Sportsbook ──
+    else if(p==='/api/matches'){if(Date.now()-lastT>60000)await feed();R={matches:cache.filter(m=>m.status!=='finished'),count:cache.length,live:cache.filter(m=>m.status==='live').length}}
+    else if(p==='/api/bet'){R=await placeBet(body.userId,body.eventId,body.market,body.selection,body.odds,+body.stake)}
+    else if(p==='/api/mybets'){R=await supa('GET',`/sports_bets?user_id=eq.${body.userId}&select=*&order=id.desc&limit=50`)}
+    
+    // ── OroPlay (proxied through backend) ──
+    else if(p==='/api/oro/launch'){
+      try{R=await oroLaunchGame(body.userCode,body.gameCode,body.vendorCode||'slot-amatic',body.language||'en')}
+      catch(e){R={error:e.message}}
+    }
+    else if(p==='/api/oro/token'){
+      try{R=await getOroToken()}catch(e){R={error:e.message}}
+    }
+    
+    // ── Status ──
+    else if(p==='/api/status'){
+      R={ok:1,server:'TunBet Sportsbook v7',uptime:process.uptime()|0,matches:cache.length,live:cache.filter(m=>m.status==='live').length,
+         wallet:{balance:'/api/wallet/balance',deduct:'/api/wallet/deduct',credit:'/api/wallet/credit'},
+         oro:{launch:'/api/oro/launch',token:'/api/oro/token'}};
+    }
+    else R={svc:'TunBet Sportsbook v7',wallet:'/api/wallet/*',sports:'/api/matches',oro:'/api/oro/*'};
+    
+    res.writeHead(200,CO);res.end(JSON.stringify(R));
+  }catch(e){
+    console.error('Server error:',e.message);
+    res.writeHead(500,CO);res.end(JSON.stringify({error:e.message}));
+  }
+});
+
+server.listen(PORT,()=>{
+  console.log('🚀 TunBet Sportsbook v7 on :'+PORT);
+  console.log('📡 Wallet: /api/wallet/{balance,deduct,credit,session-end}');
+  console.log('🎰 Oro: /api/oro/{launch,token}');
+  console.log('⚽ Sports: /api/matches, /api/bet');
+  feed();
+});
+
 cron.schedule('*/1 * * * *',()=>feed().catch(console.error));
 setInterval(()=>{const u=process.env.RENDER_EXTERNAL_URL;if(u)https.get(u+'/api/status').on('error',()=>{})},840000);

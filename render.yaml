@@ -1,19 +1,19 @@
 services:
   - type: web
     name: tunbet-sportsbook
-    runtime: node
+    env: node
+    region: frankfurt
     plan: free
     buildCommand: npm install
     startCommand: node server.js
     envVars:
+      - key: NODE_ENV
+        value: production
       - key: PORT
-        value: "4000"
+        fromGroup: production
       - key: SUPA_URL
-        value: "https://cjzjrnagpsdmolvbkhnu.supabase.co"
+        fromGroup: production
       - key: SUPA_KEY
-        value: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImNqempybmFncHNkbW9sdmJraG51Iiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc4MDM0ODY4NCwiZXhwIjoyMDk1OTI0Njg0fQ.TmowEatc4g2xpD-GT0r-jofX1zCtXjTD-s4LF7JSs6o"
-
-echo "=== DOCKERFILE ===" 
-cat /home/user/tunbet-backend/Dockerfile
-echo "=== RENDER.YAML ==="
-cat /home/user/tunbet-backend/render.yaml
+        fromGroup: production
+      - key: ORO_SEAMLESS_SECRET
+        fromGroup: production
