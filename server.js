@@ -318,7 +318,11 @@ server.listen(PORT,()=>{
   console.log('🎰 Oro: /api/oro/{launch,token}');
   console.log('⚽ Sports: /api/matches, /api/bet');
   feed();
+  // Initial ESPN sync to Supabase
+  try { require('child_process').fork('./scripts/sync-espn.js'); } catch(e) { console.log('ESPN sync skipped:', e.message); }
 });
 
 cron.schedule('*/1 * * * *',()=>feed().catch(console.error));
+// ESPN sync every 10 minutes
+cron.schedule('*/10 * * * *',()=>{ try { require('child_process').fork('./scripts/sync-espn.js'); } catch(e) {} });
 setInterval(()=>{const u=process.env.RENDER_EXTERNAL_URL;if(u)https.get(u+'/api/status').on('error',()=>{})},840000);
