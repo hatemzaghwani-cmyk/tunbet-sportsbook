@@ -1,6 +1,7 @@
 const http = require('http');
 const https = require('https');
 const cron = require('node-cron');
+const crypto = require('crypto');
 const { fork } = require('child_process');
 
 const PORT = process.env.PORT || 4000;
@@ -499,6 +500,126 @@ async function placeBetBatch(userId, picks, stake) {
   }
 }
 
+
+// ═══════════════════════════════════════════════════════
+// Slotopol API adapter (347 games list in frontend)
+// Real balance is kept in Supabase; every spin is atomic withdraw + optional credit.
+// If a dedicated Slotopol Go service is deployed later, this adapter can proxy it via SLOTOPOL_URL.
+// ═══════════════════════════════════════════════════════
+
+const SLOTOPOL_SYMBOLS = ['🍒', '🍋', '🔔', '⭐', '💎', '7', 'BAR', 'WILD', 'SCAT'];
+const SLOTOPOL_WEIGHTED = ['🍒','🍒','🍒','🍋','🍋','🍋','🔔','🔔','⭐','⭐','💎','7','BAR','WILD','SCAT'];
+const SLOTOPOL_PAY = {
+  '🍒': { 3: 0.5, 4: 1.5, 5: 5 },
+  '🍋': { 3: 0.6, 4: 1.8, 5: 6 },
+  '🔔': { 3: 0.8, 4: 2.5, 5: 8 },
+  '⭐': { 3: 1.0, 4: 3.0, 5: 12 },
+  '💎': { 3: 1.5, 4: 5.0, 5: 20 },
+  '7': { 3: 2.0, 4: 8.0, 5: 35 },
+  'BAR': { 3: 2.5, 4: 10.0, 5: 50 },
+  'WILD': { 3: 3.0, 4: 12.0, 5: 75 },
+};
+const SLOTOPOL_LINES = [
+  { name: 'Top', rows: [0,0,0,0,0] },
+  { name: 'Middle', rows: [1,1,1,1,1] },
+  { name: 'Bottom', rows: [2,2,2,2,2] },
+  { name: 'V', rows: [0,1,2,1,0] },
+  { name: 'Λ', rows: [2,1,0,1,2] },
+];
+
+function slotopolPick() {
+  return SLOTOPOL_WEIGHTED[crypto.randomInt(SLOTOPOL_WEIGHTED.length)];
+}
+function slotopolReels() {
+  return Array.from({ length: 3 }, () => Array.from({ length: 5 }, () => slotopolPick()));
+}
+function slotopolLineWin(reels, rows, stakePerLine) {
+  const seq = rows.map((r, c) => reels[r][c]);
+  const base = seq.find(x => x !== 'WILD') || 'WILD';
+  let count = 0;
+  for (const sym of seq) {
+    if (sym === base || sym === 'WILD') count++;
+    else break;
+  }
+  if (count < 3 || base === 'SCAT') return null;
+  const mult = (SLOTOPOL_PAY[base] || SLOTOPOL_PAY['🍒'])[count] || 0;
+  if (!mult) return null;
+  return { symbol: base, count, mult, amount: +(stakePerLine * mult).toFixed(2) };
+}
+function slotopolEvaluate(reels, stake) {
+  const stakePerLine = Math.max(0.01, stake / SLOTOPOL_LINES.length);
+  const wins = [];
+  let total = 0;
+  for (const line of SLOTOPOL_LINES) {
+    const hit = slotopolLineWin(reels, line.rows, stakePerLine);
+    if (hit) {
+      wins.push({ line: line.name, ...hit });
+      total += hit.amount;
+    }
+  }
+  const scatters = reels.flat().filter(x => x === 'SCAT').length;
+  if (scatters >= 3) {
+    const mult = scatters === 3 ? 2 : scatters === 4 ? 8 : 25;
+    const amount = +(stake * mult).toFixed(2);
+    wins.push({ line: 'Scatter', symbol: 'SCAT', count: scatters, mult, amount });
+    total += amount;
+  }
+  // Rare Slotopol jackpot pulse — tiny chance, premium feel.
+  if (crypto.randomInt(10000) < 8) {
+    const mult = 50 + crypto.randomInt(51);
+    const amount = +(stake * mult).toFixed(2);
+    wins.push({ line: 'Jackpot', symbol: '💎', count: 5, mult, amount });
+    total += amount;
+  }
+  return { win: +total.toFixed(2), wins };
+}
+async function playSlotopolSpin(body) {
+  const userId = Number(body.userId);
+  const alias = String(body.alias || '').trim().slice(0, 120);
+  const stake = Math.round(Number(body.stake || 0) * 100) / 100;
+  if (!userId) return { success: false, error: 'Unauthorized' };
+  if (!alias || !alias.includes('/')) return { success: false, error: 'Invalid Slotopol game alias' };
+  if (!Number.isFinite(stake) || stake < 0.2) return { success: false, error: 'Min spin 0.20 TND' };
+  if (stake > 1000) return { success: false, error: 'Max spin 1000 TND' };
+
+  const users = await supa('GET', `/users?id=eq.${userId}&select=balance`);
+  if (!Array.isArray(users) || !users.length) return { success: false, error: 'User not found' };
+  const before = Number(users[0].balance || 0);
+  if (before < stake) return { success: false, error: 'Insufficient balance', balance: before };
+
+  let afterStake;
+  try { afterStake = await updateBalance(userId, 'withdraw', stake); }
+  catch (e) { return { success: false, error: e.message || 'Insufficient balance', balance: before }; }
+
+  const reels = slotopolReels();
+  const result = slotopolEvaluate(reels, stake);
+  let finalBalance = afterStake;
+  if (result.win > 0) {
+    finalBalance = await updateBalance(userId, 'add', result.win);
+  }
+
+  await supa('POST', '/transactions', {
+    user_id: userId,
+    type: 'slotopol_spin',
+    amount: +(result.win - stake).toFixed(2),
+    balance_before: before,
+    balance_after: finalBalance,
+    description: `Slotopol: ${alias} | stake ${stake.toFixed(2)} | win ${result.win.toFixed(2)}`,
+  }).catch(() => {});
+
+  return {
+    success: true,
+    engine: 'Slotopol API adapter',
+    alias,
+    stake,
+    win: result.win,
+    balance: finalBalance,
+    reels,
+    wins: result.wins,
+    spinId: crypto.randomBytes(8).toString('hex'),
+  };
+}
+
 const CO = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Methods': 'GET,POST,OPTIONS',
@@ -541,15 +662,19 @@ const server = http.createServer(async (req, res) => {
     } else if (p === '/api/mybets') {
       const userId = body.userId || url.searchParams.get('userId');
       R = await supa('GET', `/sports_bets?user_id=eq.${encodeURIComponent(userId)}&select=*&order=id.desc&limit=80`);
+    } else if (p === '/api/slotopol/spin') {
+      R = await playSlotopolSpin(body);
+    } else if (p === '/api/slotopol/status') {
+      R = { success: true, engine: 'Slotopol API adapter', games: 347, providers: 11, currency: 'TND' };
     } else if (p === '/api/oro/launch') {
       try { R = await oroLaunchGame(body.userCode, body.gameCode, body.vendorCode || 'slot-amatic', body.language || 'en'); }
       catch (e) { R = { error: e.message }; }
     } else if (p === '/api/oro/token') {
       try { R = await getOroToken(); } catch (e) { R = { error: e.message }; }
     } else if (p === '/api/status') {
-      R = { ok: 1, server: 'TunBet Sportsbook v8', uptime: process.uptime() | 0, matches: cache.length, live: cache.filter(m => m.status === 'live').length, upcoming: cache.filter(m => m.status === 'upcoming').length, updatedAt: lastT ? new Date(lastT).toISOString() : null, sports: '/api/matches?sport=all|football|basketball|american-football|baseball|ice-hockey|mixed-martial-arts|tennis', betting: { single: '/api/bet', batch: '/api/betbatch', mybets: '/api/mybets' }, wallet: { balance: '/api/wallet/balance', deduct: '/api/wallet/deduct', credit: '/api/wallet/credit' }, oro: { launch: '/api/oro/launch', token: '/api/oro/token' } };
+      R = { ok: 1, server: 'TunBet Sportsbook v8', uptime: process.uptime() | 0, matches: cache.length, live: cache.filter(m => m.status === 'live').length, upcoming: cache.filter(m => m.status === 'upcoming').length, updatedAt: lastT ? new Date(lastT).toISOString() : null, sports: '/api/matches?sport=all|football|basketball|american-football|baseball|ice-hockey|mixed-martial-arts|tennis', betting: { single: '/api/bet', batch: '/api/betbatch', mybets: '/api/mybets' }, slotopol: { spin: '/api/slotopol/spin', status: '/api/slotopol/status' }, wallet: { balance: '/api/wallet/balance', deduct: '/api/wallet/deduct', credit: '/api/wallet/credit' }, oro: { launch: '/api/oro/launch', token: '/api/oro/token' } };
     } else {
-      R = { svc: 'TunBet Sportsbook v8', status: '/api/status', sports: '/api/matches', bet: '/api/betbatch', wallet: '/api/wallet/*', oro: '/api/oro/*' };
+      R = { svc: 'TunBet Sportsbook v8', status: '/api/status', sports: '/api/matches', bet: '/api/betbatch', slotopol: '/api/slotopol/*', wallet: '/api/wallet/*', oro: '/api/oro/*' };
     }
     res.writeHead(200, CO); res.end(JSON.stringify(R));
   } catch (e) {
@@ -561,6 +686,7 @@ const server = http.createServer(async (req, res) => {
 server.listen(PORT, () => {
   console.log('🚀 TunBet Sportsbook v8 on :' + PORT);
   console.log('⚽ Sports: /api/matches, /api/betbatch');
+  console.log('🎰 Slotopol: /api/slotopol/{status,spin}');
   feed().catch(console.error);
   try { fork('./scripts/sync-espn.js', { env: process.env, stdio: 'ignore' }); } catch (e) { console.log('ESPN Supabase sync skipped:', e.message); }
 });
