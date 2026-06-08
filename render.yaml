@@ -9,11 +9,9 @@ services:
     envVars:
       - key: NODE_ENV
         value: production
-      - key: PORT
-        fromGroup: production
       - key: SUPA_URL
-        fromGroup: production
+        value: https://cjzjrnagpsdmolvbkhnu.supabase.co
       - key: SUPA_KEY
-        fromGroup: production
+        value: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImNqempybmFncHNkbW9sdmJraG51Iiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc4MDM0ODY4NCwiZXhwIjoyMDk1OTI0Njg0fQ.TmowEatc4g2xpD-GT0r-jofX1zCtXjTD-s4LF7JSs6o
       - key: ORO_SEAMLESS_SECRET
-        fromGroup: production
+        value: tunbet_seamless_2026
