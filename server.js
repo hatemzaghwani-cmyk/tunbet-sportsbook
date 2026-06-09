@@ -19,27 +19,92 @@ process.env.SUPA_KEY = process.env.SUPA_KEY || SK;
 
 const ESPN = "https://site.api.espn.com/apis/site/v2/sports";
 const LG = [
+  // ── Soccer — Top European leagues ──
   { s: "soccer", id: "eng.1", n: "Premier League" },
   { s: "soccer", id: "esp.1", n: "La Liga" },
   { s: "soccer", id: "ger.1", n: "Bundesliga" },
   { s: "soccer", id: "ita.1", n: "Serie A" },
   { s: "soccer", id: "fra.1", n: "Ligue 1" },
-  { s: "soccer", id: "uefa.champions", n: "Champions League" },
-  { s: "soccer", id: "usa.1", n: "MLS" },
-  { s: "soccer", id: "bra.1", n: "Brasileirão" },
-  { s: "soccer", id: "tur.1", n: "Süper Lig" },
+  { s: "soccer", id: "ned.1", n: "Eredivisie" },
   { s: "soccer", id: "por.1", n: "Liga Portugal" },
+  { s: "soccer", id: "tur.1", n: "Süper Lig" },
+  { s: "soccer", id: "bel.1", n: "Belgian Pro League" },
+  { s: "soccer", id: "sco.1", n: "Scottish Premiership" },
+  { s: "soccer", id: "gre.1", n: "Super League Greece" },
+  { s: "soccer", id: "rus.1", n: "Russian Premier League" },
+  { s: "soccer", id: "ukr.1", n: "Ukrainian Premier League" },
+  { s: "soccer", id: "aut.1", n: "Austrian Bundesliga" },
+  { s: "soccer", id: "sui.1", n: "Swiss Super League" },
+  { s: "soccer", id: "den.1", n: "Danish Superliga" },
+  { s: "soccer", id: "nor.1", n: "Eliteserien" },
+  { s: "soccer", id: "swe.1", n: "Allsvenskan" },
+  // ── Soccer — Second divisions ──
+  { s: "soccer", id: "eng.2", n: "Championship" },
+  { s: "soccer", id: "esp.2", n: "LaLiga 2" },
+  { s: "soccer", id: "ger.2", n: "2. Bundesliga" },
+  { s: "soccer", id: "ita.2", n: "Serie B" },
+  { s: "soccer", id: "fra.2", n: "Ligue 2" },
+  // ── Soccer — European cups ──
+  { s: "soccer", id: "uefa.champions", n: "Champions League" },
+  { s: "soccer", id: "uefa.europa", n: "Europa League" },
+  { s: "soccer", id: "uefa.europa.conf", n: "Conference League" },
+  { s: "soccer", id: "uefa.super_cup", n: "UEFA Super Cup" },
+  { s: "soccer", id: "uefa.nations", n: "UEFA Nations League" },
+  { s: "soccer", id: "uefa.euro", n: "UEFA Euro" },
+  { s: "soccer", id: "eng.fa", n: "FA Cup" },
+  { s: "soccer", id: "eng.league_cup", n: "EFL Cup" },
+  { s: "soccer", id: "esp.copa_del_rey", n: "Copa del Rey" },
+  { s: "soccer", id: "ita.coppa_italia", n: "Coppa Italia" },
+  { s: "soccer", id: "ger.dfb_pokal", n: "DFB Pokal" },
+  // ── Soccer — Americas ──
+  { s: "soccer", id: "usa.1", n: "MLS" },
+  { s: "soccer", id: "mex.1", n: "Liga MX" },
+  { s: "soccer", id: "bra.1", n: "Brasileirão" },
+  { s: "soccer", id: "arg.1", n: "Liga Argentina" },
+  { s: "soccer", id: "col.1", n: "Categoría Primera A" },
+  { s: "soccer", id: "chi.1", n: "Chilean Primera" },
+  { s: "soccer", id: "uru.1", n: "Uruguayan Primera" },
+  { s: "soccer", id: "ecu.1", n: "Liga Pro Ecuador" },
+  { s: "soccer", id: "conmebol.libertadores", n: "Copa Libertadores" },
+  { s: "soccer", id: "conmebol.sudamericana", n: "Copa Sudamericana" },
+  { s: "soccer", id: "conmebol.america", n: "Copa América" },
+  { s: "soccer", id: "concacaf.champions", n: "CONCACAF Champions Cup" },
+  { s: "soccer", id: "concacaf.gold", n: "CONCACAF Gold Cup" },
+  // ── Soccer — Rest of world & international ──
+  { s: "soccer", id: "jpn.1", n: "J1 League" },
+  { s: "soccer", id: "ksa.1", n: "Saudi Pro League" },
+  { s: "soccer", id: "aus.1", n: "A-League" },
+  { s: "soccer", id: "chn.1", n: "Chinese Super League" },
+  { s: "soccer", id: "afc.champions", n: "AFC Champions League" },
+  { s: "soccer", id: "caf.champions", n: "CAF Champions League" },
+  { s: "soccer", id: "afc.asian.cup", n: "AFC Asian Cup" },
+  { s: "soccer", id: "caf.nations", n: "Africa Cup of Nations" },
+  { s: "soccer", id: "fifa.world", n: "FIFA World Cup" },
+  { s: "soccer", id: "fifa.cwc", n: "FIFA Club World Cup" },
+  { s: "soccer", id: "fifa.friendly", n: "International Friendly" },
   { s: "soccer", id: "fifa.worldq.conmebol", n: "WCQ CONMEBOL" },
   { s: "soccer", id: "fifa.worldq.uefa", n: "WCQ UEFA" },
+  { s: "soccer", id: "fifa.worldq.concacaf", n: "WCQ CONCACAF" },
+  { s: "soccer", id: "fifa.worldq.afc", n: "WCQ AFC" },
+  { s: "soccer", id: "fifa.worldq.caf", n: "WCQ CAF" },
+  // ── Basketball ──
   { s: "basketball", id: "nba", n: "NBA" },
   { s: "basketball", id: "wnba", n: "WNBA" },
+  { s: "basketball", id: "mens-college-basketball", n: "NCAA Basketball" },
+  // ── American Football ──
   { s: "football", id: "nfl", n: "NFL" },
+  { s: "football", id: "college-football", n: "NCAA Football" },
+  // ── Baseball ──
   { s: "baseball", id: "mlb", n: "MLB" },
+  { s: "baseball", id: "college-baseball", n: "NCAA Baseball" },
+  // ── Hockey ──
   { s: "hockey", id: "nhl", n: "NHL" },
+  // ── Combat & Tennis ──
   { s: "mma", id: "ufc", n: "UFC" },
-  { s: "tennis", id: "atp", n: "ATP" },
-  { s: "tennis", id: "wta", n: "WTA" },
+  { s: "tennis", id: "atp", n: "ATP Tour" },
+  { s: "tennis", id: "wta", n: "WTA Tour" },
 ];
+
 const IC = { soccer: "⚽", basketball: "🏀", football: "🏈", baseball: "⚾", hockey: "🏒", mma: "🥊", tennis: "🎾" };
 const SPORT_SLUG = { soccer: "football", basketball: "basketball", football: "american-football", baseball: "baseball", hockey: "ice-hockey", mma: "mixed-martial-arts", tennis: "tennis" };
 const SPORT_NAME = { soccer: "Soccer", basketball: "Basketball", football: "NFL", baseball: "MLB", hockey: "NHL", mma: "UFC", tennis: "Tennis" };
@@ -264,14 +329,22 @@ function mkts(sp, h, a, od, hR, aR) {
   const bttsP = Math.max(0.22, Math.min(0.72, 0.33 + Math.min(hp, ap) / Math.max(hp, ap) * 0.25));
 
   if (sp === 'soccer') {
+    const ou35 = Math.max(.12, goalP - .22);   // P(over 3.5)
+    const ou05 = Math.min(.95, goalP + .42);   // P(over 0.5)
     return {
       "1X2": { "1": hO, "X": dO, "2": aO },
-      "O/U 2.5": { "Over": probToOdd(goalP, M, sd + 20), "Under": probToOdd(1 - goalP, M, sd + 21) },
+      "Double Chance": { "1X": probToOdd(hp + dp, M, sd + 30), "12": probToOdd(hp + ap, M, sd + 31), "X2": probToOdd(dp + ap, M, sd + 32) },
+      "Draw No Bet": { [h]: probToOdd(hp / (hp + ap), M, sd + 33), [a]: probToOdd(ap / (hp + ap), M, sd + 34) },
+      "O/U 0.5": { "Over": probToOdd(ou05, M, sd + 16), "Under": probToOdd(1 - ou05, M, sd + 17) },
       "O/U 1.5": { "Over": probToOdd(Math.min(.9, goalP + .25), M, sd + 22), "Under": probToOdd(Math.max(.1, 1 - goalP - .25), M, sd + 23) },
-      "DC": { "1X": probToOdd(hp + dp, M, sd + 30), "12": probToOdd(hp + ap, M, sd + 31), "X2": probToOdd(dp + ap, M, sd + 32) },
-      "BTTS": { "GG": probToOdd(bttsP, M, sd + 40), "NG": probToOdd(1 - bttsP, M, sd + 41) },
-      "CS": { "1-0": vary(7.2 / Math.max(hp, .15), sd + 50), "0-0": vary(7.8, sd + 51), "0-1": vary(7.2 / Math.max(ap, .15), sd + 52), "2-1": vary(9 / Math.max(hp, .15), sd + 53), "1-1": vary(5.5, sd + 54) },
-      "HT": { "1": vary(hO * 1.35, sd + 60), "X": vary(dO * .78, sd + 61), "2": vary(aO * 1.35, sd + 62) },
+      "O/U 2.5": { "Over": probToOdd(goalP, M, sd + 20), "Under": probToOdd(1 - goalP, M, sd + 21) },
+      "O/U 3.5": { "Over": probToOdd(ou35, M, sd + 24), "Under": probToOdd(1 - ou35, M, sd + 25) },
+      "BTTS": { "Yes": probToOdd(bttsP, M, sd + 40), "No": probToOdd(1 - bttsP, M, sd + 41) },
+      "Total Goals": { "0-1": vary(3.4, sd + 45), "2-3": vary(2.05, sd + 46), "4-6": vary(3.6, sd + 47), "7+": vary(15, sd + 48) },
+      "Odd/Even": { "Odd": vary(1.95, sd + 49), "Even": vary(1.9, sd + 50) },
+      "1st Half O/U 1.5": { "Over": probToOdd(Math.max(.2, goalP - .18), M, sd + 51), "Under": probToOdd(Math.min(.8, 1 - goalP + .18), M, sd + 52) },
+      "CS": { "1-0": vary(7.2 / Math.max(hp, .15), sd + 53), "0-0": vary(7.8, sd + 54), "0-1": vary(7.2 / Math.max(ap, .15), sd + 55), "2-1": vary(9 / Math.max(hp, .15), sd + 56), "1-1": vary(5.5, sd + 57), "2-0": vary(9.5 / Math.max(hp, .15), sd + 58), "2-2": vary(13, sd + 59) },
+      "HT/Result": { "1/1": vary(hO * 1.45, sd + 60), "X/1": vary(hO * 2.6, sd + 61), "X/X": vary(dO * 1.15, sd + 62), "X/2": vary(aO * 2.6, sd + 63), "2/2": vary(aO * 1.45, sd + 64) },
     };
   }
 
@@ -285,6 +358,7 @@ function mkts(sp, h, a, od, hR, aR) {
       "ML": { [h]: hO, [a]: aO },
       "Spread": { [`${h} ${hLine}`]: closeOdd(od, 'pointSpread', 'home') || vary(1.91, sd + 30), [`${a} ${aLine}`]: closeOdd(od, 'pointSpread', 'away') || vary(1.91, sd + 31) },
       "Total": { [`O ${totalLine}`]: closeOdd(od, 'total', 'over') || vary(1.91, sd + 40), [`U ${totalLine}`]: closeOdd(od, 'total', 'under') || vary(1.91, sd + 41) },
+      "Odd/Even": { "Odd": vary(1.95, sd + 44), "Even": vary(1.9, sd + 45) },
     };
   }
 
@@ -310,8 +384,17 @@ function mkts(sp, h, a, od, hR, aR) {
     };
   }
 
-  if (sp === 'mma') return { "Winner": { [h]: hO, [a]: aO }, "Method": { "KO/TKO": vary(2.8, sd + 30), "Submission": vary(4.2, sd + 31), "Decision": vary(2.4, sd + 32) }, "Rounds": { "O 2.5": vary(1.85, sd + 40), "U 2.5": vary(1.95, sd + 41) } };
-  if (sp === 'tennis') return { "Winner": { [h]: hO, [a]: aO }, "Sets": { "O 2.5": vary(2.1, sd + 30), "U 2.5": vary(1.75, sd + 31) } };
+  if (sp === 'mma') return {
+    "Winner": { [h]: hO, [a]: aO },
+    "Method of Victory": { "KO/TKO": vary(2.8, sd + 30), "Submission": vary(4.2, sd + 31), "Decision": vary(2.4, sd + 32) },
+    "Total Rounds": { "O 1.5": vary(1.5, sd + 38), "U 1.5": vary(2.5, sd + 39), "O 2.5": vary(1.85, sd + 40), "U 2.5": vary(1.95, sd + 41) },
+    "Fight Goes the Distance": { "Yes": vary(2.1, sd + 42), "No": vary(1.72, sd + 43) },
+  };
+  if (sp === 'tennis') return {
+    "Winner": { [h]: hO, [a]: aO },
+    "Total Sets": { "O 2.5": vary(2.1, sd + 30), "U 2.5": vary(1.75, sd + 31) },
+    "Total Games": { "O 22.5": vary(1.9, sd + 32), "U 22.5": vary(1.9, sd + 33) },
+  };
   return { "Winner": { [h]: hO, [a]: aO } };
 }
 
@@ -328,12 +411,22 @@ function statusFromEspn(e) {
 async function feed() {
   if (feedPromise) return feedPromise;
   feedPromise = (async () => {
-    console.log(`[${new Date().toISOString()}] ESPN feed refresh...`);
+    console.log(`[${new Date().toISOString()}] ESPN feed refresh (${LG.length} leagues)...`);
     const all = [];
     const range = dateRange();
-    for (const l of LG) {
-      try {
+    // Fetch all leagues concurrently in batches to keep the full refresh fast (<10s)
+    const BATCH = 12;
+    const results = [];
+    for (let i = 0; i < LG.length; i += BATCH) {
+      const slice = LG.slice(i, i + BATCH);
+      const fetched = await Promise.all(slice.map(async (l) => {
         const d = await jsonGet(`${ESPN}/${l.s}/${l.id}/scoreboard?dates=${range}&limit=60`);
+        return { l, d };
+      }));
+      results.push(...fetched);
+    }
+    for (const { l, d } of results) {
+      try {
         if (!d?.events) continue;
         for (const e of d.events) {
           const c = e.competitions?.[0]; if (!c) continue;
@@ -393,13 +486,78 @@ async function feed() {
 
 function normalizeEventId(eventId) { return String(eventId || '').replace(/^espn_/, ''); }
 function marketOfBet(b) { return b.market || b.sport || ''; }
+function matchesHome(sel, homeName) {
+  if (!homeName) return false;
+  return sel === homeName || sel.startsWith(homeName) || sel.includes(homeName.substring(0, Math.min(8, homeName.length)));
+}
 function selectionWon(market, sel, hS, aS, homeName, awayName) {
-  if (market === '1X2') return (sel === '1' && hS > aS) || (sel === 'X' && hS === aS) || (sel === '2' && hS < aS);
-  if (market === 'O/U 2.5') return (sel === 'Over' && hS + aS > 2.5) || (sel === 'Under' && hS + aS < 2.5);
-  if (market === 'O/U 1.5') return (sel === 'Over' && hS + aS > 1.5) || (sel === 'Under' && hS + aS < 1.5);
-  if (market === 'BTTS') return (['GG', 'Yes'].includes(sel) && hS > 0 && aS > 0) || (['NG', 'No'].includes(sel) && (hS === 0 || aS === 0));
-  if (market === 'DC' || market === 'Double Chance') return (sel === '1X' && hS >= aS) || (sel === '12' && hS !== aS) || (sel === 'X2' && hS <= aS);
-  if (market === 'ML' || market === 'Winner') return (sel === homeName || sel.includes(homeName.substring(0, 8))) ? hS > aS : hS < aS;
+  const tot = hS + aS;
+  const m = String(market || '');
+
+  // ── 1X2 / Match Result ──
+  if (m === '1X2') return (sel === '1' && hS > aS) || (sel === 'X' && hS === aS) || (sel === '2' && hS < aS);
+
+  // ── Over/Under any line (O/U 0.5, 1.5, 2.5, 3.5 …) ──
+  if (m.startsWith('O/U')) {
+    const line = parseFloat(m.replace(/[^0-9.]/g, ''));
+    if (Number.isFinite(line)) return (sel === 'Over' && tot > line) || (sel === 'Under' && tot < line);
+  }
+
+  // ── BTTS ──
+  if (m === 'BTTS') return (['GG', 'Yes'].includes(sel) && hS > 0 && aS > 0) || (['NG', 'No'].includes(sel) && (hS === 0 || aS === 0));
+
+  // ── Double Chance ──
+  if (m === 'DC' || m === 'Double Chance') return (sel === '1X' && hS >= aS) || (sel === '12' && hS !== aS) || (sel === 'X2' && hS <= aS);
+
+  // ── Draw No Bet (push on draw → treated as not-lost via 'void' upstream; here win only on outright win) ──
+  if (m === 'Draw No Bet') {
+    if (hS === aS) return false; // push handled separately if desired
+    return matchesHome(sel, homeName) ? hS > aS : hS < aS;
+  }
+
+  // ── Total Goals bands (0-1, 2-3, 4-6, 7+) ──
+  if (m === 'Total Goals') {
+    if (sel === '0-1') return tot <= 1;
+    if (sel === '2-3') return tot === 2 || tot === 3;
+    if (sel === '4-6') return tot >= 4 && tot <= 6;
+    if (sel === '7+') return tot >= 7;
+  }
+
+  // ── Odd/Even (total points/goals) ──
+  if (m === 'Odd/Even') return (sel === 'Odd' && tot % 2 === 1) || (sel === 'Even' && tot % 2 === 0);
+
+  // ── Correct Score ──
+  if (m === 'CS') return sel === `${hS}-${aS}`;
+
+  // ── Moneyline / Winner (no draw) ──
+  if (m === 'ML' || m === 'Winner') {
+    if (hS === aS) return false;
+    return matchesHome(sel, homeName) ? hS > aS : hS < aS;
+  }
+
+  // ── Totals with explicit line in selection ("O 8.5" / "U 215.5") ──
+  if (m === 'Total') {
+    const line = parseFloat(String(sel).replace(/[^0-9.]/g, ''));
+    if (Number.isFinite(line)) {
+      if (/^o/i.test(sel)) return tot > line;
+      if (/^u/i.test(sel)) return tot < line;
+    }
+  }
+
+  // ── Handicap markets: Spread / Run Line / Puck Line ("Team +1.5" / "Team -3.5") ──
+  if (m === 'Spread' || m === 'Run Line' || m === 'Puck Line') {
+    const hcMatch = String(sel).match(/([+-]?\d+(?:\.\d+)?)\s*$/);
+    if (hcMatch) {
+      const hc = parseFloat(hcMatch[1]);
+      const isHome = matchesHome(sel, homeName);
+      const adjusted = isHome ? hS + hc - aS : aS + hc - hS;
+      return adjusted > 0;
+    }
+  }
+
+  // Markets that require half-time / period / method data we don't reliably get from
+  // the final scoreboard (HT/Result, Spread, Total team, MMA Method, Tennis games, etc.)
+  // are left to manual admin settlement (/admin) to avoid mis-grading. Return null-ish.
   return false;
 }
 async function settleBets(eventId, hS, aS) {
