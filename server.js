@@ -312,7 +312,91 @@ function pickEspnOdds(list) {
 function oddsProviderName(od) { return od?.provider?.displayName || od?.provider?.name || (od ? 'ESPN Odds' : 'TunBet Model'); }
 function hasUsableOdds(od) { return !!(od && (od.moneyline || od.pointSpread || od.total || od.overUnder || od.details)); }
 
-function mkts(sp, h, a, od, hR, aR) {
+// ── Live progress estimate (0..1 of regulation completed) per sport ──
+function liveMinute(sp, clockSec, period) {
+  if (sp === 'soccer') {
+    // ESPN soccer clock = seconds elapsed in current period; ~90 min regulation.
+    const mins = clockSec > 0 ? clockSec / 60 : (period >= 2 ? 60 : 20);
+    return Math.min(95, mins);
+  }
+  return 0; // other sports use period-based progress below
+}
+// Fraction (0..1) of a non-soccer game completed, from period + clock.
+function liveProgressFromPeriod(sp, clockSec, period, typeName) {
+  if (sp === 'soccer') return 0;
+  const periods = sp === 'basketball' ? 4 : sp === 'hockey' ? 3 : sp === 'football' ? 4 : sp === 'baseball' ? 9 : 4;
+  const perLen = sp === 'basketball' ? 720 : sp === 'hockey' ? 1200 : sp === 'football' ? 900 : 0; // seconds/period
+  const p = Math.max(1, period || 1);
+  if (/HALFTIME/i.test(typeName)) return 0.5;
+  if (perLen > 0 && clockSec > 0) {
+    // ESPN clock counts DOWN within a period for these sports.
+    const elapsedInPeriod = Math.max(0, perLen - clockSec);
+    return Math.min(0.97, ((p - 1) * perLen + elapsedInPeriod) / (periods * perLen));
+  }
+  // Baseball / fallback: use innings/period fraction.
+  return Math.min(0.95, (p - 0.5) / periods);
+}
+
+/**
+ * Convert a pre-match outcome probability into a realistic IN-PLAY probability,
+ * given the current scoreline and how much of the match is gone.
+ * Core idea: the more time elapsed, the more the live result "locks in".
+ *   - leader's win prob → rises toward 1
+ *   - trailing side's win prob → falls toward 0
+ *   - draw prob (soccer) → rises hard when level late, collapses when not level
+ */
+function liveSoccerProbs(preH, preD, preA, hS, aS, minute) {
+  const t = Math.min(0.99, minute / 95);          // time gone 0..1
+  const lock = Math.pow(t, 1.6);                   // how "locked" the current state is
+  const diff = hS - aS;
+  // Expected remaining goals (Poisson-ish): fewer minutes left → fewer goals.
+  const remGoals = Math.max(0.05, 2.5 * (1 - t));
+  // Probability the trailing team scores enough to change the picture shrinks with time.
+  let pH, pD, pA;
+  if (diff === 0) {
+    // Level: draw becomes very likely late; both wins need a late goal.
+    pD = preD * (1 - lock) + lock * Math.exp(-remGoals);          // draw locks in
+    const swing = (1 - pD);
+    const base = preH + preA || 1;
+    pH = swing * (preH / base);
+    pA = swing * (preA / base);
+  } else {
+    const leaderIsHome = diff > 0;
+    const margin = Math.abs(diff);
+    // Probability leader holds: grows with time and margin.
+    const hold = 1 - Math.exp(-(margin * (0.6 + 2.2 * t)));
+    const leaderP = hold + (1 - hold) * (leaderIsHome ? preH : preA);
+    const remainder = 1 - leaderP;
+    // Split remainder between draw and comeback based on margin & time.
+    const drawShare = margin === 1 ? (0.45 * (1 - t)) : (0.15 * (1 - t));
+    pD = remainder * drawShare;
+    const comeback = remainder * (1 - drawShare);
+    if (leaderIsHome) { pH = leaderP; pA = comeback; }
+    else { pA = leaderP; pH = comeback; }
+  }
+  const s = pH + pD + pA || 1;
+  return [pH / s, pD / s, pA / s];
+}
+
+/**
+ * Live moneyline for point-scoring sports (basketball/baseball/hockey/NFL).
+ * Blends pre-match win prob with the current lead, weighted by how much game is gone.
+ * A bigger lead later → win prob approaches 1.
+ */
+function liveMlProbs(preH, preA, hS, aS, prog, sp) {
+  const diff = hS - aS;
+  // Typical scoring spread used to scale a lead into a probability swing.
+  const scale = sp === 'basketball' ? 11 : sp === 'football' ? 9 : sp === 'hockey' ? 1.6 : 2.0;
+  // Lead advantage grows with time gone.
+  const leadEffect = Math.tanh((diff / scale) * (0.6 + 2.4 * prog));
+  // Map leadEffect (-1..1) to a probability, anchored on pre-match.
+  const anchor = preH; // pre-match home win prob
+  let pH = anchor * (1 - prog) + (0.5 + 0.5 * leadEffect) * prog;
+  pH = Math.max(0.02, Math.min(0.98, pH));
+  return [pH, 1 - pH];
+}
+
+function mkts(sp, h, a, od, hR, aR, live) {
   const M = 1.055, sd = (h.length * 31 + a.length * 17 + String(sp).length * 13) % 9999;
   const rankH = Number.isFinite(hR) ? hR : 5, rankA = Number.isFinite(aR) ? aR : 5;
   const hPower = Math.max(0.25, 1.35 - rankH * 0.035);
@@ -329,6 +413,51 @@ function mkts(sp, h, a, od, hR, aR) {
   const bttsP = Math.max(0.22, Math.min(0.72, 0.33 + Math.min(hp, ap) / Math.max(hp, ap) * 0.25));
 
   if (sp === 'soccer') {
+    const isLive = !!(live && live.on);
+    if (isLive) {
+      // ═══ IN-PLAY soccer odds: derive from current score + minutes elapsed ═══
+      const hS = live.hS | 0, aS = live.aS | 0, tot = hS + aS;
+      const minute = Math.max(1, Math.min(95, live.minute || 1));
+      const t = minute / 95;                          // fraction of match gone
+      const remGoals = Math.max(0.04, 2.6 * (1 - t)); // expected goals in remaining time
+      const clamp = (x) => Math.max(0.012, Math.min(0.985, x));
+
+      // 1X2 from a proper live model
+      const [lpH, lpD, lpA] = liveSoccerProbs(hp / (hp + dp + ap), dp / (hp + dp + ap), ap / (hp + dp + ap), hS, aS, minute);
+
+      // Over/Under N.5: line already passed → that goal count is locked.
+      // Otherwise probability another (N+0.5-tot) goals arrive (Poisson tail).
+      const poissonAtLeast = (k) => { // P(>=k more goals) with mean remGoals
+        if (k <= 0) return 1;
+        let cdf = 0, p = Math.exp(-remGoals);
+        for (let i = 0; i < k; i++) { cdf += p; p *= remGoals / (i + 1); }
+        return Math.max(0.005, 1 - cdf);
+      };
+      const ouProb = (line) => {            // P(total Over line)
+        const need = Math.ceil(line - tot); // goals still needed to go Over
+        if (tot > line) return 0.985;       // already over
+        return clamp(poissonAtLeast(need));
+      };
+      const mk = (line, base) => ({ "Over": probToOdd(ouProb(line), M, sd + base), "Under": probToOdd(1 - ouProb(line), M, sd + base + 1) });
+
+      // BTTS live: if both scored → Yes locked. Else needs the dry team(s) to score.
+      const bttsYes = (hS > 0 && aS > 0) ? 0.985
+        : clamp((hS > 0 || aS > 0) ? poissonAtLeast(1) * 0.9 : (poissonAtLeast(1) ** 2) * 0.85);
+
+      const out = {
+        "1X2": { "1": probToOdd(clamp(lpH), M, sd + 1), "X": probToOdd(clamp(lpD), M, sd + 2), "2": probToOdd(clamp(lpA), M, sd + 3) },
+        "Double Chance": { "1X": probToOdd(clamp(lpH + lpD), M, sd + 30), "12": probToOdd(clamp(lpH + lpA), M, sd + 31), "X2": probToOdd(clamp(lpD + lpA), M, sd + 32) },
+        "Draw No Bet": { [h]: probToOdd(clamp(lpH / (lpH + lpA)), M, sd + 33), [a]: probToOdd(clamp(lpA / (lpH + lpA)), M, sd + 34) },
+        "O/U 1.5": mk(1.5, 22),
+        "O/U 2.5": mk(2.5, 20),
+        "O/U 3.5": mk(3.5, 24),
+        "O/U 4.5": mk(4.5, 26),
+        "BTTS": { "Yes": probToOdd(bttsYes, M, sd + 40), "No": probToOdd(1 - bttsYes, M, sd + 41) },
+      };
+      return out;
+    }
+
+    // ═══ PRE-MATCH soccer odds ═══
     const ou35 = Math.max(.12, goalP - .22);   // P(over 3.5)
     const ou05 = Math.min(.95, goalP + .42);   // P(over 0.5)
     return {
@@ -354,8 +483,14 @@ function mkts(sp, h, a, od, hR, aR) {
     const hLine = signedLine(closeLine(od, 'pointSpread', 'home', String(spreadFallback)), String(spreadFallback));
     const aLine = signedLine(closeLine(od, 'pointSpread', 'away', String(-Number(spreadFallback))), String(-Number(spreadFallback)));
     const totalLine = cleanLine(closeLine(od, 'total', 'over', String(od?.overUnder || totalFallback)), String(od?.overUnder || totalFallback));
+    let mlH = hO, mlA = aO;
+    if (live && live.on) {
+      const [pH, pA] = liveMlProbs(hp / (hp + ap), ap / (hp + ap), live.hS | 0, live.aS | 0, live.prog || 0, sp);
+      mlH = probToOdd(pH, M, sd + 5); mlA = probToOdd(pA, M, sd + 6);
+      return { "ML": { [h]: mlH, [a]: mlA } };
+    }
     return {
-      "ML": { [h]: hO, [a]: aO },
+      "ML": { [h]: mlH, [a]: mlA },
       "Spread": { [`${h} ${hLine}`]: closeOdd(od, 'pointSpread', 'home') || vary(1.91, sd + 30), [`${a} ${aLine}`]: closeOdd(od, 'pointSpread', 'away') || vary(1.91, sd + 31) },
       "Total": { [`O ${totalLine}`]: closeOdd(od, 'total', 'over') || vary(1.91, sd + 40), [`U ${totalLine}`]: closeOdd(od, 'total', 'under') || vary(1.91, sd + 41) },
       "Odd/Even": { "Odd": vary(1.95, sd + 44), "Even": vary(1.9, sd + 45) },
@@ -366,6 +501,10 @@ function mkts(sp, h, a, od, hR, aR) {
     const totalLine = cleanLine(closeLine(od, 'total', 'over', String(od?.overUnder || 8.5)), String(od?.overUnder || 8.5));
     const hRL = signedLine(closeLine(od, 'pointSpread', 'home', '+1.5'), '+1.5');
     const aRL = signedLine(closeLine(od, 'pointSpread', 'away', '-1.5'), '-1.5');
+    if (live && live.on) {
+      const [pH, pA] = liveMlProbs(hp / (hp + ap), ap / (hp + ap), live.hS | 0, live.aS | 0, live.prog || 0, 'baseball');
+      return { "ML": { [h]: probToOdd(pH, M, sd + 5), [a]: probToOdd(pA, M, sd + 6) } };
+    }
     return {
       "ML": { [h]: hO, [a]: aO },
       "Run Line": { [`${h} ${hRL === 'OFF' ? '+1.5' : hRL}`]: closeOdd(od, 'pointSpread', 'home') || probToOdd(hp * .48, M, sd + 30), [`${a} ${aRL === 'OFF' ? '-1.5' : aRL}`]: closeOdd(od, 'pointSpread', 'away') || probToOdd(ap * .48, M, sd + 31) },
@@ -377,6 +516,10 @@ function mkts(sp, h, a, od, hR, aR) {
     const totalLine = cleanLine(closeLine(od, 'total', 'over', String(od?.overUnder || 5.5)), String(od?.overUnder || 5.5));
     const hPL = signedLine(closeLine(od, 'pointSpread', 'home', '+1.5'), '+1.5');
     const aPL = signedLine(closeLine(od, 'pointSpread', 'away', '-1.5'), '-1.5');
+    if (live && live.on) {
+      const [pH, pA] = liveMlProbs(hp / (hp + ap), ap / (hp + ap), live.hS | 0, live.aS | 0, live.prog || 0, 'hockey');
+      return { "ML": { [h]: probToOdd(pH, M, sd + 5), [a]: probToOdd(pA, M, sd + 6) } };
+    }
     return {
       "ML": { [h]: hO, [a]: aO },
       "Puck Line": { [`${h} ${hPL}`]: closeOdd(od, 'pointSpread', 'home') || probToOdd(hp * .45, M, sd + 30), [`${a} ${aPL}`]: closeOdd(od, 'pointSpread', 'away') || probToOdd(ap * .45, M, sd + 31) },
@@ -445,7 +588,16 @@ async function feed() {
           const hR = Number(h.curatedRank?.current || h.order || 5), aR = Number(a.curatedRank?.current || a.order || 5);
           const homeName = h.team.shortDisplayName || h.team.displayName;
           const awayName = a.team.shortDisplayName || a.team.displayName;
-          const markets = (status !== 'finished' && !isSusp) ? mkts(l.s, homeName, awayName, od, hR, aR) : {};
+          // Live game state (for in-play odds): minutes elapsed + current score.
+          const clockSec = Number(e.status?.clock || 0);
+          const periodNum = Number(e.status?.period || 0);
+          const live = {
+            on: status === 'live',
+            hS, aS,
+            minute: liveMinute(l.s, clockSec, periodNum),
+            prog: liveProgressFromPeriod(l.s, clockSec, periodNum, e.status?.type?.name || ''),
+          };
+          const markets = (status !== 'finished' && !isSusp) ? mkts(l.s, homeName, awayName, od, hR, aR, live) : {};
           const realOdds = hasUsableOdds(od);
           all.push({
             id,
