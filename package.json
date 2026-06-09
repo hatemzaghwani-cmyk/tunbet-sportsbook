@@ -4,5 +4,5 @@
   "main": "server.js",
   "scripts": { "start": "node server.js" },
   "dependencies": { "node-cron": "^3.0.3" },
-  "engines": { "node": ">=18" }
+  "engines": { "node": "20.x" }
 }

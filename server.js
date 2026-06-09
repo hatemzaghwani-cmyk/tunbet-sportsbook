@@ -44,15 +44,27 @@ const IC = { soccer: "⚽", basketball: "🏀", football: "🏈", baseball: "⚾
 const SPORT_SLUG = { soccer: "football", basketball: "basketball", football: "american-football", baseball: "baseball", hockey: "ice-hockey", mma: "mixed-martial-arts", tennis: "tennis" };
 const SPORT_NAME = { soccer: "Soccer", basketball: "Basketball", football: "NFL", baseball: "MLB", hockey: "NHL", mma: "UFC", tennis: "Tennis" };
 
-function jsonGet(url) {
+function jsonGet(url, _redirects = 0) {
   return new Promise((resolve) => {
-    const req = https.get(url, { headers: { 'User-Agent': 'TunBet/8.0', 'Accept': 'application/json' }, timeout: 12000 }, (res) => {
+    let settled = false;
+    const done = (v) => { if (!settled) { settled = true; resolve(v); } };
+    // Hard guarantee: never let a single request hang the feed.
+    const hardTimer = setTimeout(() => { try { req.destroy(); } catch {} done(null); }, 13000);
+    const req = https.get(url, { headers: { 'User-Agent': 'Mozilla/5.0 (TunBet/8.1)', 'Accept': 'application/json' }, timeout: 12000 }, (res) => {
+      // Follow ESPN redirects (max 3) instead of stalling on an empty body.
+      if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location && _redirects < 3) {
+        res.resume();
+        clearTimeout(hardTimer);
+        const next = res.headers.location.startsWith('http') ? res.headers.location : new URL(res.headers.location, url).toString();
+        return jsonGet(next, _redirects + 1).then(done);
+      }
       let d = '';
       res.on('data', c => d += c);
-      res.on('end', () => { try { resolve(JSON.parse(d)); } catch { resolve(null); } });
+      res.on('end', () => { clearTimeout(hardTimer); try { done(JSON.parse(d)); } catch { done(null); } });
+      res.on('error', () => { clearTimeout(hardTimer); done(null); });
     });
-    req.on('timeout', () => { req.destroy(); resolve(null); });
-    req.on('error', () => resolve(null));
+    req.on('timeout', () => { try { req.destroy(); } catch {} clearTimeout(hardTimer); done(null); });
+    req.on('error', () => { clearTimeout(hardTimer); done(null); });
   });
 }
 
