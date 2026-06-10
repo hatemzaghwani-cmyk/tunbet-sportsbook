@@ -3,6 +3,7 @@ const https = require('https');
 const cron = require('node-cron');
 const crypto = require('crypto');
 const { fork } = require('child_process');
+const { getOddsApiMatches } = require('./odds-api-adapter');
 
 const PORT = process.env.PORT || 4000;
 const SU = process.env.SUPA_URL || process.env.SUPABASE_URL || "https://cjzjrnagpsdmolvbkhnu.supabase.co";
@@ -551,87 +552,105 @@ function statusFromEspn(e) {
   return fin ? 'finished' : live ? 'live' : 'upcoming';
 }
 
+async function feedEspn() {
+  console.log(`[${new Date().toISOString()}] ESPN feed refresh (${LG.length} leagues)...`);
+  const all = [];
+  const range = dateRange();
+  const BATCH = 12;
+  const results = [];
+  for (let i = 0; i < LG.length; i += BATCH) {
+    const slice = LG.slice(i, i + BATCH);
+    const fetched = await Promise.all(slice.map(async (l) => {
+      const d = await jsonGet(`${ESPN}/${l.s}/${l.id}/scoreboard?dates=${range}&limit=60`);
+      return { l, d };
+    }));
+    results.push(...fetched);
+  }
+  for (const { l, d } of results) {
+    try {
+      if (!d?.events) continue;
+      for (const e of d.events) {
+        const c = e.competitions?.[0]; if (!c) continue;
+        const ts = c.competitors || [];
+        const h = ts.find(t => t.homeAway === 'home') || ts[0];
+        const a = ts.find(t => t.homeAway === 'away') || ts[1];
+        if (!h?.team || !a?.team) continue;
+        const status = statusFromEspn(e);
+        const hS = Number(h.score || 0), aS = Number(a.score || 0), id = String(e.id);
+        const prev = prevSc[id];
+        const scoreChanged = prev && (prev.h !== hS || prev.a !== aS);
+        prevSc[id] = { h: hS, a: aS, settled: prev?.settled || false };
+        if (status === 'live' && scoreChanged) suspended[id] = Date.now();
+        const isSusp = !!(suspended[id] && Date.now() - suspended[id] < 30000);
+        const od = pickEspnOdds(c.odds);
+        const hR = Number(h.curatedRank?.current || h.order || 5), aR = Number(a.curatedRank?.current || a.order || 5);
+        const homeName = h.team.shortDisplayName || h.team.displayName;
+        const awayName = a.team.shortDisplayName || a.team.displayName;
+        const clockSec = Number(e.status?.clock || 0);
+        const periodNum = Number(e.status?.period || 0);
+        const live = {
+          on: status === 'live',
+          hS, aS,
+          minute: liveMinute(l.s, clockSec, periodNum),
+          prog: liveProgressFromPeriod(l.s, clockSec, periodNum, e.status?.type?.name || ''),
+        };
+        const markets = (status !== 'finished' && !isSusp) ? mkts(l.s, homeName, awayName, od, hR, aR, live) : {};
+        const realOdds = hasUsableOdds(od);
+        all.push({
+          id,
+          league: `${IC[l.s] || '🏅'} ${l.n}`,
+          sport: SPORT_SLUG[l.s] || l.s,
+          espnSport: l.s,
+          sportName: SPORT_NAME[l.s] || l.s,
+          home: h.team.displayName,
+          away: a.team.displayName,
+          homeLogo: h.team.logo || '',
+          awayLogo: a.team.logo || '',
+          date: e.date,
+          status,
+          clock: e.status?.displayClock || '',
+          period: e.status?.type?.shortDetail || e.status?.type?.detail || '',
+          homeScore: hS,
+          awayScore: aS,
+          suspended: isSusp,
+          hasRealOdds: realOdds,
+          oddsSource: realOdds ? `ESPN ${oddsProviderName(od)}` : 'TunBet mathematical model',
+          markets,
+          updatedAt: new Date().toISOString(),
+        });
+        if (status === 'finished' && prev && !prev.settled) {
+          prevSc[id].settled = true;
+          settleBets(id, hS, aS, l.s).catch(e => console.error('settle', id, e.message));
+        }
+      }
+    } catch (e) { console.error(l.n, e.message); }
+  }
+  all.sort((a, b) => (a.status === 'live' ? 0 : a.status === 'upcoming' ? 1 : 2) - (b.status === 'live' ? 0 : b.status === 'upcoming' ? 1 : 2) || new Date(a.date) - new Date(b.date));
+  return all;
+}
+
 async function feed() {
   if (feedPromise) return feedPromise;
   feedPromise = (async () => {
-    console.log(`[${new Date().toISOString()}] ESPN feed refresh (${LG.length} leagues)...`);
-    const all = [];
-    const range = dateRange();
-    // Fetch all leagues concurrently in batches to keep the full refresh fast (<10s)
-    const BATCH = 12;
-    const results = [];
-    for (let i = 0; i < LG.length; i += BATCH) {
-      const slice = LG.slice(i, i + BATCH);
-      const fetched = await Promise.all(slice.map(async (l) => {
-        const d = await jsonGet(`${ESPN}/${l.s}/${l.id}/scoreboard?dates=${range}&limit=60`);
-        return { l, d };
-      }));
-      results.push(...fetched);
-    }
-    for (const { l, d } of results) {
-      try {
-        if (!d?.events) continue;
-        for (const e of d.events) {
-          const c = e.competitions?.[0]; if (!c) continue;
-          const ts = c.competitors || [];
-          const h = ts.find(t => t.homeAway === 'home') || ts[0];
-          const a = ts.find(t => t.homeAway === 'away') || ts[1];
-          if (!h?.team || !a?.team) continue;
-          const status = statusFromEspn(e);
-          const hS = Number(h.score || 0), aS = Number(a.score || 0), id = String(e.id);
-          const prev = prevSc[id];
-          const scoreChanged = prev && (prev.h !== hS || prev.a !== aS);
-          prevSc[id] = { h: hS, a: aS, settled: prev?.settled || false };
-          if (status === 'live' && scoreChanged) suspended[id] = Date.now();
-          const isSusp = !!(suspended[id] && Date.now() - suspended[id] < 30000);
-          const od = pickEspnOdds(c.odds);
-          const hR = Number(h.curatedRank?.current || h.order || 5), aR = Number(a.curatedRank?.current || a.order || 5);
-          const homeName = h.team.shortDisplayName || h.team.displayName;
-          const awayName = a.team.shortDisplayName || a.team.displayName;
-          // Live game state (for in-play odds): minutes elapsed + current score.
-          const clockSec = Number(e.status?.clock || 0);
-          const periodNum = Number(e.status?.period || 0);
-          const live = {
-            on: status === 'live',
-            hS, aS,
-            minute: liveMinute(l.s, clockSec, periodNum),
-            prog: liveProgressFromPeriod(l.s, clockSec, periodNum, e.status?.type?.name || ''),
-          };
-          const markets = (status !== 'finished' && !isSusp) ? mkts(l.s, homeName, awayName, od, hR, aR, live) : {};
-          const realOdds = hasUsableOdds(od);
-          all.push({
-            id,
-            league: `${IC[l.s] || '🏅'} ${l.n}`,
-            sport: SPORT_SLUG[l.s] || l.s,
-            espnSport: l.s,
-            sportName: SPORT_NAME[l.s] || l.s,
-            home: h.team.displayName,
-            away: a.team.displayName,
-            homeLogo: h.team.logo || '',
-            awayLogo: a.team.logo || '',
-            date: e.date,
-            status,
-            clock: e.status?.displayClock || '',
-            period: e.status?.type?.shortDetail || e.status?.type?.detail || '',
-            homeScore: hS,
-            awayScore: aS,
-            suspended: isSusp,
-            hasRealOdds: realOdds,
-            oddsSource: realOdds ? `ESPN ${oddsProviderName(od)}` : 'TunBet mathematical model',
-            markets,
-            updatedAt: new Date().toISOString(),
-          });
-          if (status === 'finished' && prev && !prev.settled) {
-            prevSc[id].settled = true;
-            settleBets(id, hS, aS, l.s).catch(e => console.error('settle', id, e.message));
-          }
-        }
-      } catch (e) { console.error(l.n, e.message); }
-    }
-    all.sort((a, b) => (a.status === 'live' ? 0 : a.status === 'upcoming' ? 1 : 2) - (b.status === 'live' ? 0 : b.status === 'upcoming' ? 1 : 2) || new Date(a.date) - new Date(b.date));
-    cache = all;
-    lastT = Date.now();
-    console.log(`✓ ESPN feed: ${cache.length} events (${cache.filter(m => m.status === 'live').length} live, ${cache.filter(m => m.status === 'upcoming').length} upcoming)`);
+    // Primary: odds-api.io (3000+ real matches)
+    try {
+      console.log(`[${new Date().toISOString()}] Odds-API.io feed refresh...`);
+      const oddsApiMatches = await getOddsApiMatches('football');
+      if (oddsApiMatches && oddsApiMatches.length > 100) {
+        cache = oddsApiMatches;
+        lastT = Date.now();
+        console.log(`✓ Odds-API.io feed: ${cache.length} events (${cache.filter(m => m.status === 'live').length} live, ${cache.filter(m => m.status === 'upcoming').length} upcoming)`);
+        return;
+      }
+    } catch (e) { console.error('Odds-API.io feed failed:', e.message); }
+
+    // Fallback: ESPN
+    try {
+      const espnMatches = await feedEspn();
+      cache = espnMatches;
+      lastT = Date.now();
+      console.log(`✓ ESPN fallback: ${cache.length} events (${cache.filter(m => m.status === 'live').length} live, ${cache.filter(m => m.status === 'upcoming').length} upcoming)`);
+    } catch (e) { console.error('ESPN fallback failed:', e.message); }
   })().finally(() => { feedPromise = null; });
   return feedPromise;
 }
@@ -976,7 +995,7 @@ const server = http.createServer(async (req, res) => {
       let matches = cache.filter(m => m.status !== 'finished');
       if (sport && sport !== 'all') matches = matches.filter(m => m.sport === sport);
       if (status && status !== 'all') matches = matches.filter(m => m.status === status);
-      R = { success: true, matches: matches.slice(0, limit), count: matches.length, live: matches.filter(m => m.status === 'live').length, upcoming: matches.filter(m => m.status === 'upcoming').length, updatedAt: new Date(lastT).toISOString(), source: 'ESPN + DraftKings + TunBet model' };
+      R = { success: true, matches: matches.slice(0, limit), count: matches.length, live: matches.filter(m => m.status === 'live').length, upcoming: matches.filter(m => m.status === 'upcoming').length, updatedAt: new Date(lastT).toISOString(), source: 'Odds-API.io + TunBet model' };
     } else if (p === '/api/bet') {
       R = await placeBet(body.userId, body.eventId, body.market, body.selection, body.odds, body.stake);
     } else if (p === '/api/betbatch') {
@@ -1013,6 +1032,6 @@ server.listen(PORT, () => {
   try { fork('./scripts/sync-espn.js', { env: process.env, stdio: 'ignore' }); } catch (e) { console.log('ESPN Supabase sync skipped:', e.message); }
 });
 
-cron.schedule('*/1 * * * *', () => feed().catch(console.error));
+cron.schedule('*/2 * * * *', () => feed().catch(console.error));
 cron.schedule('*/10 * * * *', () => { try { fork('./scripts/sync-espn.js', { env: process.env, stdio: 'ignore' }); } catch {} });
 setInterval(() => { const u = process.env.RENDER_EXTERNAL_URL; if (u) https.get(u + '/api/status').on('error', () => {}); }, 840000);
