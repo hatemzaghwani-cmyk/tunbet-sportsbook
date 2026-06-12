@@ -15,5 +15,11 @@ services:
         value: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImNqempybmFncHNkbW9sdmJraG51Iiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc4MDM0ODY4NCwiZXhwIjoyMDk1OTI0Njg0fQ.TmowEatc4g2xpD-GT0r-jofX1zCtXjTD-s4LF7JSs6o
       - key: ORO_SEAMLESS_SECRET
         value: tunbet_seamless_2026
+      - key: ORO_API_URL
+        value: https://bs.sxvwlkohlv.com/api/v2
+      - key: ORO_CLIENT_ID
+        value: Hatem1_TND
+      - key: ORO_CLIENT_SECRET
+        value: JdYysA2TS7K3xzIYJoOlRn2z9i9XWk57
       - key: ODDS_API_KEY
         value: c18282bc3771a4939079a7fcc2ae6b7bc8caf3811ac20506da552accef35abe0
