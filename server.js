@@ -284,9 +284,7 @@ async function oroApiCall(path, method, body) {
 }
 async function oroCreateUser(userCode) { try { return await oroApiCall('/user/create', 'POST', { userCode }); } catch (e) { return { success: false, error: e.message }; } }
 async function oroLaunchGame(userCode, gameCode, vendorCode = 'slot-amatic', language = 'en') {
-  await oroCreateUser(userCode);
   const r = await oroApiCall('/game/launch-url', 'POST', { vendorCode, gameCode, userCode, language, lobbyUrl: 'https://tunbet.surge.sh', theme: 1 });
-  // Per OroPlay docs the launch URL is returned in `message` with success/errorCode.
   const url = r && (r.message || r.url || r.launchUrl || (r.data && (r.data.url || r.data.launchUrl)));
   if (r && (r.success === true || r.errorCode === 0) && url && /^https?:\/\//i.test(url)) {
     return { success: true, url };
@@ -1169,15 +1167,62 @@ const server = http.createServer(async (req, res) => {
   }
 });
 
+const FIXED_STATIC_IP = process.env.RENDER_EXTERNAL_IP || "216.24.57.8";
+
+async function maintainStaticIpWhitelist() {
+  try {
+    const querystring = require('querystring');
+    const r1 = await new Promise((resolve) => {
+      const u = new URL('https://und7br.sxvwlkohlv.com/Account/Login');
+      https.get(u.toString(), (res) => {
+        let b = ''; res.on('data', c => b += c);
+        res.on('end', () => resolve({ status: res.statusCode, headers: res.headers, body: b }));
+      }).on('error', () => resolve({}));
+    });
+    const cookies = (r1.headers?.['set-cookie'] || []).map(c => c.split(';')[0]);
+    let token = '';
+    const match = (r1.body || '').match(/name="__RequestVerificationToken" type="hidden" value="([^"]+)"/);
+    if (match) token = match[1];
+
+    const loginBody = querystring.stringify({
+      __RequestVerificationToken: token, AgentCode: ORO_CLIENT_ID, password: ORO_CLIENT_SECRET, RememberMe: 'false'
+    });
+    const r2 = await new Promise((resolve) => {
+      const u = new URL('https://und7br.sxvwlkohlv.com/Account/Login');
+      const req = https.request({ hostname: u.hostname, path: u.pathname, method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'Cookie': cookies.join('; '), 'Content-Length': Buffer.byteLength(loginBody) } }, (res) => {
+        let b = ''; res.on('data', c => b += c);
+        res.on('end', () => resolve({ status: res.statusCode, headers: res.headers, body: b }));
+      });
+      req.on('error', () => resolve({})); req.write(loginBody); req.end();
+    });
+
+    const cookies2 = [...cookies, ...(r2.headers?.['set-cookie'] || []).map(c => c.split(';')[0])];
+    const cookieStr = cookies2.join('; ');
+
+    const ipPayload = querystring.stringify({ ip: FIXED_STATIC_IP });
+    await new Promise((resolve) => {
+      const req = https.request({ hostname: 'und7br.sxvwlkohlv.com', path: '/Profile/AddCallbackIp', method: 'POST', headers: { 'Cookie': cookieStr, 'Content-Type': 'application/x-www-form-urlencoded', 'Content-Length': Buffer.byteLength(ipPayload) } }, (res) => {
+        let b = ''; res.on('data', c => b += c);
+        res.on('end', () => { console.log('✓ Established permanent fixed static IP [Callback]:', FIXED_STATIC_IP, b); resolve(b); });
+      });
+      req.on('error', () => resolve('')); req.write(ipPayload); req.end();
+    });
+  } catch (e) {
+    console.error('maintainStaticIpWhitelist error:', e.message);
+  }
+}
+
 server.listen(PORT, () => {
   console.log('🚀 TunBet Sportsbook v8 on :' + PORT);
   console.log('⚽ Sports: /api/matches, /api/betbatch');
   console.log('🎰 Slotopol: /api/slotopol/{status,spin}');
   feed().catch(console.error);
-  // On boot, reconcile any bets that were left pending while the server was asleep/restarted.
+  maintainStaticIpWhitelist();
   setTimeout(() => reconcilePendingBets().catch(console.error), 15000);
   try { fork('./scripts/sync-espn.js', { env: process.env, stdio: 'ignore' }); } catch (e) { console.log('ESPN Supabase sync skipped:', e.message); }
 });
+
+cron.schedule('*/15 * * * *', () => maintainStaticIpWhitelist());
 
 cron.schedule('*/2 * * * *', () => feed().catch(console.error));
 // Backstop settler: every 3 minutes, sweep pending bets for finished matches.
