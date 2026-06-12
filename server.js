@@ -740,8 +740,7 @@ function selectionWon(market, sel, hS, aS, homeName, awayName) {
   // are left to manual admin settlement (/admin) to avoid mis-grading. Return null-ish.
   return false;
 }
-async function settleBets(eventId, hS, aS) {
-  const bets = await supa('GET', `/sports_bets?event_id=eq.${encodeURIComponent(eventId)}&status=eq.pending&select=*`);
+async function settleBets(eventId, hS, aS) {  const bets = await supa('GET', `/sports_bets?event_id=eq.${encodeURIComponent(eventId)}&status=eq.pending&select=*`);
   if (!Array.isArray(bets) || !bets.length) return;
   const m = cache.find(x => x.id === String(eventId));
   const homeName = m?.home || '', awayName = m?.away || '';
@@ -750,6 +749,94 @@ async function settleBets(eventId, hS, aS) {
     const updated = await supa('PATCH', `/sports_bets?id=eq.${b.id}&status=eq.pending`, { status, settled_at: new Date().toISOString(), payout: status === 'won' ? b.potential_win : 0 });
     if (!Array.isArray(updated) || !updated.length) continue;
     if (status === 'won') {
+      const beforeRows = await supa('GET', `/users?id=eq.${b.user_id}&select=balance`);
+      const before = parseFloat(beforeRows?.[0]?.balance || 0);
+      const payout = Number(b.potential_win || 0);
+      const after = await updateBalance(b.user_id, 'add', payout);
+      await supa('POST', '/transactions', { user_id: b.user_id, type: 'win', amount: payout, balance_before: before, balance_after: after, description: `Won: ${b.event_name}` }).catch(() => {});
+    }
+  }
+}
+
+// ── Resilient backstop: settle any pending bet whose match has finished, even if the
+//    live→finished transition was missed (e.g. server restart / Render cold start). ──
+const ESPN_SUMMARY = {
+  football: 'soccer', basketball: 'basketball', 'american-football': 'football',
+  baseball: 'baseball', 'ice-hockey': 'hockey', 'mixed-martial-arts': 'mma', tennis: 'tennis',
+};
+// Map our sport slug + league back to an ESPN scoreboard path so we can look up a finished score.
+function espnLeaguePathFor(eventId) {
+  const m = cache.find(x => x.id === String(eventId));
+  if (!m) return null;
+  const espnSport = m.espnSport || ESPN_SUMMARY[m.sport] || 'soccer';
+  // Recover the league id from the loaded LG list by matching the display name.
+  const leagueName = String(m.league || '').replace(/^[^A-Za-z]+/, '').trim();
+  const lg = LG.find(l => l.n === leagueName) || LG.find(l => `${IC[l.s] || ''} ${l.n}`.trim() === m.league);
+  return lg ? { s: lg.s, id: lg.id } : { s: espnSport, id: null };
+}
+
+let reconciling = false;
+async function reconcilePendingBets() {
+  if (reconciling) return;
+  reconciling = true;
+  try {
+    const pending = await supa('GET', `/sports_bets?status=eq.pending&select=id,event_id,sport,selection,event_name,user_id,potential_win&limit=500`);
+    if (!Array.isArray(pending) || !pending.length) return;
+    // Group by event so we look up each finished game once.
+    const byEvent = {};
+    for (const b of pending) (byEvent[b.event_id] = byEvent[b.event_id] || []).push(b);
+
+    for (const [eventId, bets] of Object.entries(byEvent)) {
+      // 1) Fast path: the live feed already has the finished score in cache or prevSc.
+      let hS, aS, finished = false, homeName = '', awayName = '';
+      const cached = cache.find(x => x.id === String(eventId));
+      const tracked = prevSc[eventId];
+      if (tracked && tracked.settled) continue; // already handled by live settler
+      if (cached && cached.status === 'finished') {
+        hS = cached.homeScore; aS = cached.awayScore; finished = true;
+        homeName = cached.home; awayName = cached.away;
+      }
+      // 2) Slow path: ask ESPN directly for the final score via the league scoreboard.
+      if (!finished) {
+        const lp = espnLeaguePathFor(eventId);
+        if (lp && lp.id) {
+          const range = dateRange();
+          const d = await jsonGet(`${ESPN}/${lp.s}/${lp.id}/scoreboard?dates=${range}&limit=120`);
+          const ev = (d?.events || []).find(e => String(e.id) === String(eventId));
+          if (ev) {
+            const c = ev.competitions?.[0];
+            const ts = c?.competitors || [];
+            const h = ts.find(t => t.homeAway === 'home') || ts[0];
+            const a = ts.find(t => t.homeAway === 'away') || ts[1];
+            if (h && a && statusFromEspn(ev) === 'finished') {
+              hS = Number(h.score || 0); aS = Number(a.score || 0); finished = true;
+              homeName = h.team.displayName; awayName = a.team.displayName;
+            }
+          }
+        }
+      }
+      if (!finished) continue;
+      // Settle with the same logic as the live settler, marking prevSc so we never double-pay.
+      prevSc[eventId] = { h: hS, a: aS, settled: true };
+      await settleBetsKnown(eventId, hS, aS, homeName, awayName);
+    }
+  } catch (e) {
+    console.error('reconcile error:', e.message);
+  } finally {
+    reconciling = false;
+  }
+}
+
+// Settle when we already know the names/scores (used by the reconciler).
+async function settleBetsKnown(eventId, hS, aS, homeName, awayName) {
+  const bets = await supa('GET', `/sports_bets?event_id=eq.${encodeURIComponent(eventId)}&status=eq.pending&select=*`);
+  if (!Array.isArray(bets) || !bets.length) return;
+  for (const b of bets) {
+    const won = selectionWon(marketOfBet(b), b.selection, hS, aS, homeName, awayName);
+    const status = won ? 'won' : 'lost';
+    const updated = await supa('PATCH', `/sports_bets?id=eq.${b.id}&status=eq.pending`, { status, settled_at: new Date().toISOString(), payout: won ? b.potential_win : 0 });
+    if (!Array.isArray(updated) || !updated.length) continue; // someone else settled it first
+    if (won) {
       const beforeRows = await supa('GET', `/users?id=eq.${b.user_id}&select=balance`);
       const before = parseFloat(beforeRows?.[0]?.balance || 0);
       const payout = Number(b.potential_win || 0);
@@ -1013,6 +1100,11 @@ const server = http.createServer(async (req, res) => {
     } else if (p === '/api/mybets') {
       const userId = body.userId || url.searchParams.get('userId');
       R = await supa('GET', `/sports_bets?user_id=eq.${encodeURIComponent(userId)}&select=*&order=id.desc&limit=80`);
+    } else if (p === '/api/settle') {
+      // Manual trigger for the resilient settler (auto-grades any finished match's pending bets).
+      await reconcilePendingBets();
+      const stillPending = await supa('GET', `/sports_bets?status=eq.pending&select=id`).catch(() => []);
+      R = { success: true, message: 'Reconcile complete', pendingRemaining: Array.isArray(stillPending) ? stillPending.length : 0 };
     } else if (p === '/api/slotopol/spin') {
       R = await playSlotopolSpin(body);
     } else if (p === '/api/slotopol/status') {
@@ -1039,9 +1131,13 @@ server.listen(PORT, () => {
   console.log('⚽ Sports: /api/matches, /api/betbatch');
   console.log('🎰 Slotopol: /api/slotopol/{status,spin}');
   feed().catch(console.error);
+  // On boot, reconcile any bets that were left pending while the server was asleep/restarted.
+  setTimeout(() => reconcilePendingBets().catch(console.error), 15000);
   try { fork('./scripts/sync-espn.js', { env: process.env, stdio: 'ignore' }); } catch (e) { console.log('ESPN Supabase sync skipped:', e.message); }
 });
 
 cron.schedule('*/2 * * * *', () => feed().catch(console.error));
+// Backstop settler: every 3 minutes, sweep pending bets for finished matches.
+cron.schedule('*/3 * * * *', () => reconcilePendingBets().catch(console.error));
 cron.schedule('*/10 * * * *', () => { try { fork('./scripts/sync-espn.js', { env: process.env, stdio: 'ignore' }); } catch {} });
 setInterval(() => { const u = process.env.RENDER_EXTERNAL_URL; if (u) https.get(u + '/api/status').on('error', () => {}); }, 840000);
