@@ -8,7 +8,7 @@ const { getOddsApiMatches } = require('./odds-api-adapter');
 const PORT = process.env.PORT || 4000;
 const SU = process.env.SUPA_URL || process.env.SUPABASE_URL || "https://cjzjrnagpsdmolvbkhnu.supabase.co";
 const SK = process.env.SUPA_KEY || process.env.SUPABASE_SERVICE_KEY || "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImNqempybmFncHNkbW9sdmJraG51Iiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc4MDM0ODY4NCwiZXhwIjoyMDk1OTI0Njg0fQ.TmowEatc4g2xpD-GT0r-jofX1zCtXjTD-s4LF7JSs6o";
-const ORO_API = "https://und7br.sxvwlkohlv.com/api/v2";
+const ORO_API = process.env.ORO_API_URL || "https://und7br.sxvwlkohlv.com/api/v2";
 const ORO_CLIENT_ID = process.env.ORO_CLIENT_ID || "Hatem1_TND";
 const ORO_CLIENT_SECRET = process.env.ORO_CLIENT_SECRET || "JdYysA2TS7K3xzIYJoOlRn2z9i9XWk57";
 const ORO_SEAMLESS_SECRET = process.env.ORO_SEAMLESS_SECRET || "tunbet_seamless_2026";
@@ -283,7 +283,16 @@ async function oroApiCall(path, method, body) {
   });
 }
 async function oroCreateUser(userCode) { try { return await oroApiCall('/user/create', 'POST', { userCode }); } catch (e) { return { success: false, error: e.message }; } }
-async function oroLaunchGame(userCode, gameCode, vendorCode = 'slot-amatic', language = 'en') { await oroCreateUser(userCode); return oroApiCall('/game/launch-url', 'POST', { vendorCode, gameCode, userCode, language, lobbyUrl: 'https://tunbet.surge.sh' }); }
+async function oroLaunchGame(userCode, gameCode, vendorCode = 'slot-amatic', language = 'en') {
+  await oroCreateUser(userCode);
+  const r = await oroApiCall('/game/launch-url', 'POST', { vendorCode, gameCode, userCode, language, lobbyUrl: 'https://tunbet.surge.sh', theme: 1 });
+  // Per OroPlay docs the launch URL is returned in `message` with success/errorCode.
+  const url = r && (r.message || r.url || r.launchUrl || (r.data && (r.data.url || r.data.launchUrl)));
+  if (r && (r.success === true || r.errorCode === 0) && url && /^https?:\/\//i.test(url)) {
+    return { success: true, url };
+  }
+  return { success: false, error: (r && (r.message || r.error)) || 'OroPlay launch unavailable', errorCode: r && r.errorCode };
+}
 
 function americanToDecimal(v) {
   if (v === undefined || v === null || v === '' || v === 'OFF') return 0;
@@ -1114,6 +1123,19 @@ const server = http.createServer(async (req, res) => {
       catch (e) { R = { error: e.message }; }
     } else if (p === '/api/oro/token') {
       try { R = await getOroToken(); } catch (e) { R = { error: e.message }; }
+    } else if (p === '/api/myip') {
+      // Discover this server's outbound IP (for OroPlay IP whitelisting).
+      R = await new Promise((resolve) => {
+        https.get('https://api.ipify.org?format=json', (s) => {
+          let b = ''; s.on('data', c => b += c);
+          s.on('end', () => { try { resolve({ ip: JSON.parse(b).ip, oroApi: ORO_API }); } catch { resolve({ ip: b, oroApi: ORO_API }); } });
+        }).on('error', (e) => resolve({ error: e.message }));
+      });
+    } else if (p === '/api/oro/diag') {
+      // Diagnostic: confirms whether the OroPlay API base + credentials work yet.
+      let tok = null, err = null;
+      try { tok = await getOroToken(); } catch (e) { err = e.message; }
+      R = { oroApi: ORO_API, tokenObtained: !!(tok && typeof tok === 'string' && tok.length > 20), raw: typeof tok === 'string' ? tok.slice(0, 30) + '…' : tok, error: err };
     } else if (p === '/api/status') {
       R = { ok: 1, server: 'TunBet Sportsbook v8', uptime: process.uptime() | 0, matches: cache.length, live: cache.filter(m => m.status === 'live').length, upcoming: cache.filter(m => m.status === 'upcoming').length, updatedAt: lastT ? new Date(lastT).toISOString() : null, sports: '/api/matches?sport=all|football|basketball|american-football|baseball|ice-hockey|mixed-martial-arts|tennis', betting: { single: '/api/bet', batch: '/api/betbatch', mybets: '/api/mybets' }, slotopol: { spin: '/api/slotopol/spin', status: '/api/slotopol/status' }, wallet: { balance: '/api/wallet/balance', deduct: '/api/wallet/deduct', credit: '/api/wallet/credit' }, oro: { launch: '/api/oro/launch', token: '/api/oro/token' } };
     } else {
