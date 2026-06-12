@@ -632,25 +632,28 @@ async function feedEspn() {
 async function feed() {
   if (feedPromise) return feedPromise;
   feedPromise = (async () => {
-    // Primary: odds-api.io (3000+ real matches)
+    // Primary: ESPN — official real team logos + DraftKings odds for known leagues.
     try {
-      console.log(`[${new Date().toISOString()}] Odds-API.io feed refresh...`);
+      const espnMatches = await feedEspn();
+      if (espnMatches && espnMatches.length > 0) {
+        cache = espnMatches;
+        lastT = Date.now();
+        console.log(`✓ ESPN feed: ${cache.length} events (${cache.filter(m => m.status === 'live').length} live, ${cache.filter(m => m.status === 'upcoming').length} upcoming) — real logos`);
+        return;
+      }
+    } catch (e) { console.error('ESPN feed failed:', e.message); }
+
+    // Fallback: odds-api.io (only if ESPN returned nothing at all).
+    try {
+      console.log(`[${new Date().toISOString()}] ESPN empty — Odds-API.io fallback...`);
       const oddsApiMatches = await getOddsApiMatches('football');
       if (oddsApiMatches && oddsApiMatches.length > 100) {
         cache = oddsApiMatches;
         lastT = Date.now();
-        console.log(`✓ Odds-API.io feed: ${cache.length} events (${cache.filter(m => m.status === 'live').length} live, ${cache.filter(m => m.status === 'upcoming').length} upcoming)`);
+        console.log(`✓ Odds-API.io fallback: ${cache.length} events (${cache.filter(m => m.status === 'live').length} live, ${cache.filter(m => m.status === 'upcoming').length} upcoming)`);
         return;
       }
-    } catch (e) { console.error('Odds-API.io feed failed:', e.message); }
-
-    // Fallback: ESPN
-    try {
-      const espnMatches = await feedEspn();
-      cache = espnMatches;
-      lastT = Date.now();
-      console.log(`✓ ESPN fallback: ${cache.length} events (${cache.filter(m => m.status === 'live').length} live, ${cache.filter(m => m.status === 'upcoming').length} upcoming)`);
-    } catch (e) { console.error('ESPN fallback failed:', e.message); }
+    } catch (e) { console.error('Odds-API.io fallback failed:', e.message); }
   })().finally(() => { feedPromise = null; });
   return feedPromise;
 }
