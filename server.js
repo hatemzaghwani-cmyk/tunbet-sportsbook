@@ -575,6 +575,12 @@ async function feedEspn() {
         const h = ts.find(t => t.homeAway === 'home') || ts[0];
         const a = ts.find(t => t.homeAway === 'away') || ts[1];
         if (!h?.team || !a?.team) continue;
+        // ── Strict logo policy: never expose a match unless BOTH teams have a real ESPN logo. ──
+        const hLogo = h.team.logo || (Array.isArray(h.team.logos) && h.team.logos[0]?.href) || '';
+        const aLogo = a.team.logo || (Array.isArray(a.team.logos) && a.team.logos[0]?.href) || '';
+        if (!hLogo || !aLogo) continue;
+        // Skip undetermined placeholder fixtures (brackets/playoffs not yet seeded).
+        if (/\bTBD\b|To Be Determined/i.test(h.team.displayName) || /\bTBD\b|To Be Determined/i.test(a.team.displayName)) continue;
         const status = statusFromEspn(e);
         const hS = Number(h.score || 0), aS = Number(a.score || 0), id = String(e.id);
         const prev = prevSc[id];
@@ -604,8 +610,8 @@ async function feedEspn() {
           sportName: SPORT_NAME[l.s] || l.s,
           home: h.team.displayName,
           away: a.team.displayName,
-          homeLogo: h.team.logo || '',
-          awayLogo: a.team.logo || '',
+          homeLogo: hLogo,
+          awayLogo: aLogo,
           date: e.date,
           status,
           clock: e.status?.displayClock || '',
@@ -995,10 +1001,11 @@ const server = http.createServer(async (req, res) => {
       const sport = url.searchParams.get('sport') || body.sport || 'all';
       const status = url.searchParams.get('status') || body.status || 'all';
       const limit = Math.min(Number(url.searchParams.get('limit') || body.limit || 300), 500);
-      let matches = cache.filter(m => m.status !== 'finished');
+      // Strict logo policy at the API edge: never serve a match unless BOTH teams have a real logo.
+      let matches = cache.filter(m => m.status !== 'finished' && m.homeLogo && m.awayLogo);
       if (sport && sport !== 'all') matches = matches.filter(m => m.sport === sport);
       if (status && status !== 'all') matches = matches.filter(m => m.status === status);
-      R = { success: true, matches: matches.slice(0, limit), count: matches.length, live: matches.filter(m => m.status === 'live').length, upcoming: matches.filter(m => m.status === 'upcoming').length, updatedAt: new Date(lastT).toISOString(), source: 'Odds-API.io + TunBet model' };
+      R = { success: true, matches: matches.slice(0, limit), count: matches.length, live: matches.filter(m => m.status === 'live').length, upcoming: matches.filter(m => m.status === 'upcoming').length, updatedAt: new Date(lastT).toISOString(), source: 'ESPN real logos + DraftKings odds' };
     } else if (p === '/api/bet') {
       R = await placeBet(body.userId, body.eventId, body.market, body.selection, body.odds, body.stake);
     } else if (p === '/api/betbatch') {
