@@ -249,12 +249,18 @@ async function credit(username, amount, txId, gameCode) {
 }
 
 let oroToken = null, oroExp = 0;
+function getOutgoingProxyAgent() {
+  const proxyUrl = process.env.QUOTAGUARDSTATIC_URL || process.env.HTTP_PROXY || process.env.PROXY_URL || process.env.FIXIE_URL;
+  if (!proxyUrl) return undefined;
+  try { const { HttpsProxyAgent } = require('https-proxy-agent'); return new HttpsProxyAgent(proxyUrl); } catch { return undefined; }
+}
+
 async function getOroToken() {
   if (oroToken && Date.now() < oroExp) return oroToken;
   return new Promise((resolve, reject) => {
     const d = JSON.stringify({ clientId: ORO_CLIENT_ID, clientSecret: ORO_CLIENT_SECRET });
     const u = new URL(ORO_API + '/auth/createtoken');
-    const r = https.request({ hostname: u.hostname, path: u.pathname, method: 'POST', headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(d) } }, (s) => {
+    const r = https.request({ hostname: u.hostname, path: u.pathname, method: 'POST', agent: getOutgoingProxyAgent(), headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(d) } }, (s) => {
       let b = '';
       s.on('data', c => b += c);
       s.on('end', () => {
@@ -274,7 +280,7 @@ async function oroApiCall(path, method, body) {
   return new Promise((resolve, reject) => {
     const d = JSON.stringify(body || {});
     const u = new URL(ORO_API + path);
-    const r = https.request({ hostname: u.hostname, path: u.pathname + u.search, method, headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(d), 'Authorization': 'Bearer ' + token } }, (s) => {
+    const r = https.request({ hostname: u.hostname, path: u.pathname + u.search, method, agent: getOutgoingProxyAgent(), headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(d), 'Authorization': 'Bearer ' + token } }, (s) => {
       let b = '';
       s.on('data', c => b += c);
       s.on('end', () => { try { resolve(JSON.parse(b)); } catch (e) { reject(e); } });
