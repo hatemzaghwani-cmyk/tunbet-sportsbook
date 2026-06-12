@@ -54,15 +54,17 @@ function buildOddsMap(valueBets) {
     for (const [side, val] of Object.entries(bookOdds)) {
       if (side === 'href') continue;
       const v = parseFloat(String(val));
-      if (Number.isFinite(v) && v > 1) oddsMap[eid][mk][side] = v;
+      if (Number.isFinite(v) && v > 1) oddsMap[eid][mk][side] = +v.toFixed(2);
     }
   }
   return oddsMap;
 }
 
+function r2(n) { return +Number(n).toFixed(2); }
+
 function modelOdds(h, a) {
   const sd = (h.length * 31 + a.length * 17) % 9999;
-  const vary = (o, seed) => Math.max(1.01, Math.min(999, o * (1 + Math.sin(seed + Date.now() / 30000) * 0.015)));
+  const vary = (o, seed) => r2(Math.max(1.01, Math.min(999, o * (1 + Math.sin(seed + Date.now() / 30000) * 0.015))));
   const probToOdd = (p, margin = 1.055, seed = 1) => vary(margin / Math.max(0.01, Math.min(0.95, p)), seed);
   const hPower = Math.max(0.25, 1.35 - 5 * 0.035);
   const aPower = Math.max(0.25, 1.35 - 5 * 0.035);
