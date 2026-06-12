@@ -1136,6 +1136,27 @@ const server = http.createServer(async (req, res) => {
       let tok = null, err = null;
       try { tok = await getOroToken(); } catch (e) { err = e.message; }
       R = { oroApi: ORO_API, tokenObtained: !!(tok && typeof tok === 'string' && tok.length > 20), raw: typeof tok === 'string' ? tok.slice(0, 30) + '…' : tok, error: err };
+    } else if (p === '/api/oro/probe') {
+      // Probe multiple candidate API base URLs from the (whitelisted) server IP and report raw responses.
+      const candidates = [
+        'https://und7br.sxvwlkohlv.com/api/v2',
+        'https://api.sxvwlkohlv.com/api/v2',
+        'https://sxvwlkohlv.com/api/v2',
+        'https://und7br.sxvwlkohlv.com/agent/api/v2',
+        'https://und7br.sxvwlkohlv.com/Api/v2',
+      ];
+      const tryOne = (base) => new Promise((resolve) => {
+        const body = JSON.stringify({ clientId: ORO_CLIENT_ID, clientSecret: ORO_CLIENT_SECRET });
+        let u; try { u = new URL(base + '/auth/createtoken'); } catch { return resolve({ base, error: 'bad url' }); }
+        const req = https.request({ hostname: u.hostname, path: u.pathname, method: 'POST', headers: { 'Content-Type': 'application/json', 'Accept': '*/*', 'Content-Length': Buffer.byteLength(body) }, timeout: 10000 }, (s) => {
+          let b = ''; s.on('data', c => b += c);
+          s.on('end', () => resolve({ base, status: s.statusCode, len: b.length, body: b.slice(0, 200) }));
+        });
+        req.on('timeout', () => { req.destroy(); resolve({ base, error: 'timeout' }); });
+        req.on('error', (e) => resolve({ base, error: e.message }));
+        req.write(body); req.end();
+      });
+      R = { results: await Promise.all(candidates.map(tryOne)) };
     } else if (p === '/api/status') {
       R = { ok: 1, server: 'TunBet Sportsbook v8', uptime: process.uptime() | 0, matches: cache.length, live: cache.filter(m => m.status === 'live').length, upcoming: cache.filter(m => m.status === 'upcoming').length, updatedAt: lastT ? new Date(lastT).toISOString() : null, sports: '/api/matches?sport=all|football|basketball|american-football|baseball|ice-hockey|mixed-martial-arts|tennis', betting: { single: '/api/bet', batch: '/api/betbatch', mybets: '/api/mybets' }, slotopol: { spin: '/api/slotopol/spin', status: '/api/slotopol/status' }, wallet: { balance: '/api/wallet/balance', deduct: '/api/wallet/deduct', credit: '/api/wallet/credit' }, oro: { launch: '/api/oro/launch', token: '/api/oro/token' } };
     } else {
