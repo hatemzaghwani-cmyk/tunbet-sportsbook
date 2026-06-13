@@ -1173,7 +1173,9 @@ const server = http.createServer(async (req, res) => {
   }
 });
 
-const FIXED_STATIC_IP = process.env.RENDER_EXTERNAL_IP || "216.24.57.8";
+// Render's outbound IP for our service (verified stable). If Render ever
+// rotates it, override with the RENDER_EXTERNAL_IP env var without redeploy.
+const FIXED_STATIC_IP = process.env.RENDER_EXTERNAL_IP || "74.220.51.24";
 
 async function maintainStaticIpWhitelist() {
   try {
