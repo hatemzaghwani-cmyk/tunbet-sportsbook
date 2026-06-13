@@ -1225,12 +1225,20 @@ server.listen(PORT, () => {
   console.log('⚽ Sports: /api/matches, /api/betbatch');
   console.log('🎰 Slotopol: /api/slotopol/{status,spin}');
   feed().catch(console.error);
-  maintainStaticIpWhitelist();
+  // ⛔ Auto-whitelist worker DISABLED — OroPlay (Master King) explicitly warned:
+  //    "do not change your IP address anymore. They will block you if you try
+  //     to change your IP for the third time."
+  // OroPlay management is activating 74.220.51.24 on their side manually.
+  // To re-enable later, set env ENABLE_ORO_IP_WORKER=1.
+  if (process.env.ENABLE_ORO_IP_WORKER === '1') maintainStaticIpWhitelist();
   setTimeout(() => reconcilePendingBets().catch(console.error), 15000);
   try { fork('./scripts/sync-espn.js', { env: process.env, stdio: 'ignore' }); } catch (e) { console.log('ESPN Supabase sync skipped:', e.message); }
 });
 
-cron.schedule('*/15 * * * *', () => maintainStaticIpWhitelist());
+// ⛔ Cron also gated behind ENABLE_ORO_IP_WORKER — see comment above on startup.
+if (process.env.ENABLE_ORO_IP_WORKER === '1') {
+  cron.schedule('*/15 * * * *', () => maintainStaticIpWhitelist());
+}
 
 cron.schedule('*/2 * * * *', () => feed().catch(console.error));
 // Backstop settler: every 3 minutes, sweep pending bets for finished matches.
