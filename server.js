@@ -899,7 +899,7 @@ async function placeBet(userId, eventId, market, selection, odds, stake) {
   return { success: true, odds: out.bets?.[0]?.odds, potentialWin: out.bets?.[0]?.potential_win, newBalance: out.newBalance };
 }
 
-async function placeBetBatch(userId, picks, stake) {
+async function placeBetBatch(userId, picks, stake, betType) {
   userId = Number(userId); stake = Math.round(Number(stake) * 100) / 100;
   if (!userId) return { error: 'Unauthorized' };
   if (!Array.isArray(picks) || !picks.length) return { error: 'No selections' };
@@ -912,7 +912,12 @@ async function placeBetBatch(userId, picks, stake) {
   const verified = await ensureFreshForBet(picks);
   if (verified.error) return verified;
   const selections = verified.picks;
-  const totalStake = +(stake * selections.length).toFixed(2);
+
+  // Combo = single ticket, stake taken once, all picks must win.
+  // Singles = N tickets, stake × N taken, each pick settled independently.
+  const isCombo = (betType === 'combo') && selections.length >= 2;
+  const totalStake = isCombo ? stake : +(stake * selections.length).toFixed(2);
+
   const users = await supa('GET', `/users?id=eq.${userId}&select=balance`);
   if (!Array.isArray(users) || !users.length) return { error: 'User not found' };
   const bal = Number(users[0].balance || 0);
@@ -922,28 +927,55 @@ async function placeBetBatch(userId, picks, stake) {
   try { newBalance = await updateBalance(userId, 'withdraw', totalStake); }
   catch (e) { return { error: e.message || 'Insufficient balance', balance: bal }; }
 
-  const rows = selections.map(v => ({
-    user_id: userId,
-    event_id: v.eventId,
-    event_name: `${v.match.home} vs ${v.match.away}`.slice(0, 250),
-    sport: v.market,
-    league: v.match.league,
-    selection: v.selection,
-    selection_name: `${v.market}: ${v.selection}`.slice(0, 250),
-    odds: v.odds,
-    stake,
-    potential_win: +(stake * v.odds).toFixed(2),
-    status: 'pending',
-  }));
+  let rows;
+  if (isCombo) {
+    // ── COMBO: one ledger row per leg, linked by combo_id; only the first leg
+    //    holds the stake & potential payout so balance impact is correct.
+    const comboId = `combo_${userId}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+    const comboOdds = +selections.reduce((acc, v) => acc * v.odds, 1).toFixed(2);
+    const potentialWin = +(stake * comboOdds).toFixed(2);
+    const legsLabel = selections.map(v => `${v.match.home}/${v.match.away}: ${v.selection}`).join(' + ').slice(0, 240);
+    rows = selections.map((v, i) => ({
+      user_id: userId,
+      event_id: v.eventId,
+      event_name: `[Combo ${selections.length}x] ${v.match.home} vs ${v.match.away}`.slice(0, 250),
+      sport: v.market,
+      league: v.match.league,
+      selection: v.selection,
+      selection_name: i === 0
+        ? `COMBO (${selections.length} legs @ ${comboOdds.toFixed(2)}): ${legsLabel}`.slice(0, 250)
+        : `${v.market}: ${v.selection} [leg ${i + 1}/${selections.length}]`.slice(0, 250),
+      odds: i === 0 ? comboOdds : v.odds,
+      stake: i === 0 ? stake : 0,
+      potential_win: i === 0 ? potentialWin : 0,
+      status: 'pending',
+    }));
+  } else {
+    rows = selections.map(v => ({
+      user_id: userId,
+      event_id: v.eventId,
+      event_name: `${v.match.home} vs ${v.match.away}`.slice(0, 250),
+      sport: v.market,
+      league: v.match.league,
+      selection: v.selection,
+      selection_name: `${v.market}: ${v.selection}`.slice(0, 250),
+      odds: v.odds,
+      stake,
+      potential_win: +(stake * v.odds).toFixed(2),
+      status: 'pending',
+    }));
+  }
 
   try {
     const inserted = await supa('POST', '/sports_bets', rows);
     await supa('POST', '/transactions', {
       user_id: userId, type: 'bet', amount: -totalStake,
       balance_before: bal, balance_after: newBalance,
-      description: rows.length === 1 ? `${rows[0].event_name} | ${rows[0].selection_name}` : `Sportsbook ${rows.length} selections`,
+      description: isCombo
+        ? `Combo ${selections.length}x @ ${(rows[0].odds).toFixed(2)} | win ${rows[0].potential_win.toFixed(2)} TND`
+        : rows.length === 1 ? `${rows[0].event_name} | ${rows[0].selection_name}` : `Sportsbook ${rows.length} selections`,
     }).catch(() => {});
-    return { success: true, count: rows.length, totalStake, newBalance, bets: Array.isArray(inserted) ? inserted : rows };
+    return { success: true, count: rows.length, totalStake, newBalance, bets: Array.isArray(inserted) ? inserted : rows, isCombo, comboOdds: isCombo ? rows[0].odds : null };
   } catch (e) {
     await updateBalance(userId, 'add', totalStake).catch(() => {});
     return { error: 'Failed to record bet — stake refunded' };
@@ -1109,7 +1141,7 @@ const server = http.createServer(async (req, res) => {
     } else if (p === '/api/bet') {
       R = await placeBet(body.userId, body.eventId, body.market, body.selection, body.odds, body.stake);
     } else if (p === '/api/betbatch') {
-      R = await placeBetBatch(body.userId, body.picks || body.selections, body.stake);
+      R = await placeBetBatch(body.userId, body.picks || body.selections, body.stake, body.betType);
     } else if (p === '/api/mybets') {
       const userId = body.userId || url.searchParams.get('userId');
       R = await supa('GET', `/sports_bets?user_id=eq.${encodeURIComponent(userId)}&select=*&order=id.desc&limit=80`);
