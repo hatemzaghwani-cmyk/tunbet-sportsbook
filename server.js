@@ -1172,22 +1172,6 @@ const server = http.createServer(async (req, res) => {
       let tok = null, err = null;
       try { tok = await getOroToken(); } catch (e) { err = e.message; }
       R = { oroApi: ORO_API, tokenObtained: !!(tok && typeof tok === 'string' && tok.length > 20), raw: typeof tok === 'string' ? tok.slice(0, 30) + '…' : tok, error: err };
-    } else if (p === '/api/oro/probetoken') {
-      // TEMP diagnostic: test createtoken from THIS server's (whitelisted) IP with
-      // arbitrary credentials passed in the body. Reports the raw OroPlay response.
-      const cid = body.clientId || ORO_CLIENT_ID;
-      const csec = body.clientSecret || ORO_CLIENT_SECRET;
-      R = await new Promise((resolve) => {
-        const payload = JSON.stringify({ clientId: cid, clientSecret: csec });
-        const u = new URL(ORO_API + '/auth/createtoken');
-        const rq = https.request({ hostname: u.hostname, path: u.pathname, method: 'POST', headers: { 'Content-Type': 'application/json', 'Accept': '*/*', 'Content-Length': Buffer.byteLength(payload) }, timeout: 12000 }, (s) => {
-          let b = ''; s.on('data', c => b += c);
-          s.on('end', () => resolve({ clientId: cid, status: s.statusCode, rateRemaining: s.headers['x-rate-limit-remaining'], body: b.slice(0, 300) }));
-        });
-        rq.on('timeout', () => { rq.destroy(); resolve({ clientId: cid, error: 'timeout' }); });
-        rq.on('error', (e) => resolve({ clientId: cid, error: e.message }));
-        rq.write(payload); rq.end();
-      });
     } else if (p === '/api/oro/probe') {
       // Probe multiple candidate API base URLs from the (whitelisted) server IP and report raw responses.
       const candidates = [
