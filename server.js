@@ -987,7 +987,7 @@ async function placeBetBatch(userId, picks, stake, betType) {
 // BetNex public demo API adapter (works with the demo key embedded by BetNex)
 // ═══════════════════════════════════════════════════════
 const BETNEX_API_BASE = (process.env.BETNEX_API_BASE || 'https://livecasinoapi.betnex.co/casino').replace(/\/$/, '');
-const BETNEX_API_KEY = process.env.BETNEX_API_KEY || '696e48e34c48652be77215e3';
+const BETNEX_API_KEY = process.env.BETNEX_API_KEY || '6a314d7f68623b2edd31c793';
 function betnexGet(path) {
   return new Promise((resolve, reject) => {
     const u = new URL(BETNEX_API_BASE + path);
@@ -1017,9 +1017,7 @@ async function betnexLaunch(body) {
   const userId = body.userId ? Number(body.userId) : 0;
   const username = String(body.username || (userId ? `tunbet${userId}` : `tunbet${Date.now()}`)).replace(/[^a-zA-Z0-9]/g, '').slice(0, 32);
   const requestedCurrency = String(body.currency || body.currencyCode || body.currencycode || 'TND').toUpperCase();
-  const requestedMoneyTnd = Math.max(0, Number(body.money ?? body.balance ?? body.amount ?? body.wallet ?? 50));
-  // BetNex game sessions expect balance in minor units for some providers; 50 TND => 5000.
-  const requestedMoney = Math.round(requestedMoneyTnd * 100);
+  const requestedMoney = Math.max(0, Number(body.money ?? body.balance ?? body.amount ?? body.wallet ?? 50));
   const payload = {
     username,
     gameId,
