@@ -1016,14 +1016,35 @@ async function betnexLaunch(body) {
   if (!gameId) return { success: false, error: 'Missing gameId' };
   const userId = body.userId ? Number(body.userId) : 0;
   const username = String(body.username || (userId ? `tunbet${userId}` : `tunbet${Date.now()}`)).replace(/[^a-zA-Z0-9]/g, '').slice(0, 32);
+  const requestedCurrency = String(body.currency || body.currencyCode || body.currencycode || 'TND').toUpperCase();
+  const requestedMoney = Math.max(0, Number(body.money ?? body.balance ?? body.amount ?? body.wallet ?? 50));
   const payload = {
     username,
     gameId,
-    lang: body.lang || 'en',
-    money: Math.max(0, Number(body.money ?? body.balance ?? 100000)),
+    lang: body.lang || body.language || 'en',
+    // BetNex public demo sometimes reads only one of these aliases depending on provider.
+    // Send all common wallet/currency aliases to force a TND session when supported.
+    money: requestedMoney,
+    balance: requestedMoney,
+    amount: requestedMoney,
+    wallet: requestedMoney,
+    credit: requestedMoney,
+    initialBalance: requestedMoney,
+    initial_balance: requestedMoney,
     home_url: String(body.home_url || body.homeurl || 'https://hatemzaghwani-cmyk.github.io/betnex-catalog/'),
     platform: Number(body.platform || 2),
-    currency: String(body.currency || 'TND').toUpperCase(),
+    currency: requestedCurrency,
+    currencyCode: requestedCurrency,
+    currencycode: requestedCurrency,
+    currency_code: requestedCurrency,
+    wallet_currency: requestedCurrency,
+    display_currency: requestedCurrency,
+    game_currency: requestedCurrency,
+    player_currency: requestedCurrency,
+    demo: 0,
+    is_demo: false,
+    play_for_fun: 0,
+    mode: 'real',
   };
   const d = await betnexPost('/getgameurl', payload);
   const url = d?.payload?.game_launch_url || d?.game_launch_url || d?.url;
@@ -1274,7 +1295,7 @@ const server = http.createServer(async (req, res) => {
       const launch = await betnexLaunch({
         gameId: url.searchParams.get('gameId') || url.searchParams.get('gameid'),
         username: url.searchParams.get('username'),
-        money: url.searchParams.get('money') || 100000,
+        money: url.searchParams.get('money') || 50,
         currency: url.searchParams.get('currency') || 'TND',
         platform: url.searchParams.get('platform') || 2,
         home_url: url.searchParams.get('home_url') || 'https://hatemzaghwani-cmyk.github.io/betnex-catalog/',
