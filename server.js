@@ -984,6 +984,126 @@ async function placeBetBatch(userId, picks, stake, betType) {
 
 
 // ═══════════════════════════════════════════════════════
+// TunBet Originals — in-house Stake-style games (no paid provider)
+// Server-side RNG + Supabase atomic balance. Original mechanics/branding only.
+// ═══════════════════════════════════════════════════════
+function cents(n) { return Math.round(Number(n || 0) * 100) / 100; }
+function clampNum(n, min, max, fallback) { n = Number(n); return Number.isFinite(n) ? Math.max(min, Math.min(max, n)) : fallback; }
+function randFloat() { return crypto.randomInt(0, 1_000_000_000) / 1_000_000_000; }
+function pickUnique(count, max) {
+  const s = new Set();
+  while (s.size < count) s.add(crypto.randomInt(0, max));
+  return [...s];
+}
+
+function originalOutcome(game, params = {}) {
+  game = String(game || '').toLowerCase();
+  const nonce = crypto.randomBytes(16).toString('hex');
+  const serverSeedHash = crypto.createHash('sha256').update(nonce).digest('hex');
+
+  if (game === 'dice') {
+    const mode = params.mode === 'under' ? 'under' : 'over';
+    const target = clampNum(params.target, 5, 95, 50);
+    const roll = Math.floor(randFloat() * 10000) / 100;
+    const chance = mode === 'over' ? (100 - target) : target;
+    const multiplier = Math.floor((99 / chance) * 100) / 100; // 1% house edge
+    const win = mode === 'over' ? roll > target : roll < target;
+    return { game, win, multiplier, payoutMultiplier: win ? multiplier : 0, roll, target, mode, serverSeedHash };
+  }
+
+  if (game === 'limbo') {
+    const target = clampNum(params.target, 1.1, 100, 2);
+    const r = Math.max(0.000001, randFloat());
+    const crash = Math.min(100000, Math.floor((0.99 / r) * 100) / 100);
+    const win = crash >= target;
+    return { game, win, multiplier: target, payoutMultiplier: win ? target : 0, crash, target, serverSeedHash };
+  }
+
+  if (game === 'mines') {
+    const mines = Math.round(clampNum(params.mines, 1, 20, 5));
+    const picks = Math.round(clampNum(params.picks, 1, Math.min(24, 25 - mines), 5));
+    const mineCells = new Set(pickUnique(mines, 25));
+    const chosen = pickUnique(picks, 25);
+    const hitMine = chosen.find(c => mineCells.has(c));
+    let safeProb = 1;
+    for (let i = 0; i < picks; i++) safeProb *= (25 - mines - i) / (25 - i);
+    const multiplier = Math.floor((0.97 / Math.max(0.000001, safeProb)) * 100) / 100;
+    const win = hitMine === undefined;
+    return { game, win, multiplier, payoutMultiplier: win ? multiplier : 0, mines, picks, chosen, mineCells: [...mineCells], hitMine, serverSeedHash };
+  }
+
+  if (game === 'plinko') {
+    const risk = ['low', 'medium', 'high'].includes(params.risk) ? params.risk : 'medium';
+    const rows = 12;
+    const tables = {
+      low:    [5, 2.1, 1.4, 1.15, 1, 0.75, 0.55, 0.75, 1, 1.15, 1.4, 2.1, 5],
+      medium: [16, 5, 2, 1.4, 1.05, 0.55, 0.35, 0.55, 1.05, 1.4, 2, 5, 16],
+      high:   [50, 14, 5, 2, 0.8, 0.35, 0.15, 0.35, 0.8, 2, 5, 14, 50],
+    };
+    let pos = 0; const path = [];
+    for (let i = 0; i < rows; i++) { const right = crypto.randomInt(0, 2); pos += right; path.push(right ? 'R' : 'L'); }
+    const multiplier = tables[risk][pos];
+    return { game, win: multiplier >= 1, multiplier, payoutMultiplier: multiplier, risk, rows, slot: pos, path, serverSeedHash };
+  }
+
+  if (game === 'keno') {
+    const picks = Math.round(clampNum(params.picks, 3, 10, 6));
+    const player = pickUnique(picks, 40).map(n => n + 1).sort((a,b)=>a-b);
+    const drawn = pickUnique(10, 40).map(n => n + 1).sort((a,b)=>a-b);
+    const hits = player.filter(n => drawn.includes(n)).length;
+    const tables = {
+      3: [0,0,1.1,6], 4:[0,0,0.8,2.2,12], 5:[0,0,0.5,1.4,5,25],
+      6:[0,0,0,1,3,12,60], 7:[0,0,0,0.7,2,7,25,90], 8:[0,0,0,0,1.2,4,12,45,120],
+      9:[0,0,0,0,0.8,2.5,8,25,80,180], 10:[0,0,0,0,0,1.5,5,15,50,120,250]
+    };
+    const multiplier = tables[picks][hits] || 0;
+    return { game, win: multiplier > 0, multiplier, payoutMultiplier: multiplier, picks, player, drawn, hits, serverSeedHash };
+  }
+
+  throw new Error('Unknown original game');
+}
+
+async function playOriginalGame(body) {
+  const userId = Number(body.userId);
+  const game = String(body.game || '').toLowerCase();
+  const stake = cents(body.stake);
+  const params = body.params || {};
+  if (!userId) return { success: false, error: 'Unauthorized' };
+  if (!stake || stake < 0.1) return { success: false, error: 'Min bet 0.10 TND' };
+  if (stake > 1000) return { success: false, error: 'Max bet 1000 TND' };
+
+  const users = await supa('GET', `/users?id=eq.${encodeURIComponent(userId)}&select=balance`);
+  if (!Array.isArray(users) || !users.length) return { success: false, error: 'User not found' };
+  const before = cents(users[0].balance || 0);
+  if (before < stake) return { success: false, error: 'Insufficient balance', balance: before };
+
+  let afterBet;
+  try { afterBet = await updateBalance(userId, 'withdraw', stake); }
+  catch (e) { return { success: false, error: e.message || 'Insufficient balance', balance: before }; }
+
+  const outcome = originalOutcome(game, params);
+  const payout = cents(stake * Number(outcome.payoutMultiplier || 0));
+  let finalBalance = afterBet;
+  if (payout > 0) finalBalance = await updateBalance(userId, 'add', payout);
+
+  const txid = `orig_${game}_${Date.now()}_${crypto.randomBytes(4).toString('hex')}`;
+  await supa('POST', '/transactions', {
+    user_id: userId, type: 'original_bet', amount: -stake,
+    balance_before: before, balance_after: afterBet,
+    description: `TunBet Originals ${game} stake ${stake.toFixed(2)} TND tx:${txid}`,
+  }).catch(() => {});
+  if (payout > 0) {
+    await supa('POST', '/transactions', {
+      user_id: userId, type: 'original_win', amount: payout,
+      balance_before: afterBet, balance_after: finalBalance,
+      description: `TunBet Originals ${game} win x${Number(outcome.multiplier || 0).toFixed(2)} tx:${txid}`,
+    }).catch(() => {});
+  }
+
+  return { success: true, txid, stake, payout, profit: cents(payout - stake), balance: finalBalance, outcome };
+}
+
+// ═══════════════════════════════════════════════════════
 // Slotopol API adapter (347 games list in frontend)
 // Real balance is kept in Supabase; every spin is atomic withdraw + optional credit.
 // If a dedicated Slotopol Go service is deployed later, this adapter can proxy it via SLOTOPOL_URL.
@@ -1147,6 +1267,8 @@ const server = http.createServer(async (req, res) => {
     } else if (p === '/api/mybets') {
       const userId = body.userId || url.searchParams.get('userId');
       R = await supa('GET', `/sports_bets?user_id=eq.${encodeURIComponent(userId)}&select=*&order=id.desc&limit=80`);
+    } else if (p === '/api/originals/play') {
+      R = await playOriginalGame(body);
     } else if (p === '/api/settle') {
       // Manual trigger for the resilient settler (auto-grades any finished match's pending bets).
       await reconcilePendingBets();
@@ -1196,7 +1318,7 @@ const server = http.createServer(async (req, res) => {
       });
       R = { results: await Promise.all(candidates.map(tryOne)) };
     } else if (p === '/api/status') {
-      R = { ok: 1, server: 'TunBet Sportsbook v8', uptime: process.uptime() | 0, matches: cache.length, live: cache.filter(m => m.status === 'live').length, upcoming: cache.filter(m => m.status === 'upcoming').length, updatedAt: lastT ? new Date(lastT).toISOString() : null, sports: '/api/matches?sport=all|football|basketball|american-football|baseball|ice-hockey|mixed-martial-arts|tennis', betting: { single: '/api/bet', batch: '/api/betbatch', mybets: '/api/mybets' }, slotopol: { spin: '/api/slotopol/spin', status: '/api/slotopol/status' }, wallet: { balance: '/api/wallet/balance', deduct: '/api/wallet/deduct', credit: '/api/wallet/credit' }, oro: { launch: '/api/oro/launch', token: '/api/oro/token' } };
+      R = { ok: 1, server: 'TunBet Sportsbook v8', uptime: process.uptime() | 0, matches: cache.length, live: cache.filter(m => m.status === 'live').length, upcoming: cache.filter(m => m.status === 'upcoming').length, updatedAt: lastT ? new Date(lastT).toISOString() : null, sports: '/api/matches?sport=all|football|basketball|american-football|baseball|ice-hockey|mixed-martial-arts|tennis', betting: { single: '/api/bet', batch: '/api/betbatch', mybets: '/api/mybets' }, slotopol: { spin: '/api/slotopol/spin', status: '/api/slotopol/status' }, originals: { play: '/api/originals/play', games: 'dice|mines|plinko|limbo|keno' }, wallet: { balance: '/api/wallet/balance', deduct: '/api/wallet/deduct', credit: '/api/wallet/credit' }, oro: { launch: '/api/oro/launch', token: '/api/oro/token' } };
     } else {
       R = { svc: 'TunBet Sportsbook v8', status: '/api/status', sports: '/api/matches', bet: '/api/betbatch', slotopol: '/api/slotopol/*', wallet: '/api/wallet/*', oro: '/api/oro/*' };
     }
