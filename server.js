@@ -984,6 +984,110 @@ async function placeBetBatch(userId, picks, stake, betType) {
 
 
 // ═══════════════════════════════════════════════════════
+// Spingate / SoftSwiss live-catalog test adapter (GitHub Pages experiment)
+// Credentials intentionally kept server-side; frontend only calls /api/live/*.
+// ═══════════════════════════════════════════════════════
+const SPINGATE_API_URL = process.env.SPINGATE_API_URL || 'https://gs.aggregtr.com/api/system/operator';
+const SPINGATE_API_LOGIN = process.env.SPINGATE_API_LOGIN || '0047cd0d-5a40-48a9-a6bc-cb8a615f0690-578867';
+const SPINGATE_API_PASSWORD = process.env.SPINGATE_API_PASSWORD || 'tfonhVGglLFJ';
+const LIVE_CATALOG_RAW = 'https://raw.githubusercontent.com/blancos13/casino-api-dashboard/master/backend/src/data/games.json';
+let liveGamesCache = { t: 0, games: [] };
+
+function jsonPost(url, body, timeoutMs = 20000) {
+  return new Promise((resolve, reject) => {
+    const u = new URL(url);
+    const payload = JSON.stringify(body || {});
+    const req = https.request({
+      hostname: u.hostname,
+      path: u.pathname + u.search,
+      method: 'POST',
+      timeout: timeoutMs,
+      headers: { 'Content-Type': 'application/json', 'Accept': 'application/json', 'User-Agent': 'TunBetLiveGateway/1.0', 'Content-Length': Buffer.byteLength(payload) }
+    }, (res) => {
+      let d = '';
+      res.on('data', c => d += c);
+      res.on('end', () => {
+        let parsed = d;
+        try { parsed = d ? JSON.parse(d) : {}; } catch {}
+        if (res.statusCode >= 400) reject(new Error(typeof parsed === 'object' ? (parsed.message || parsed.error || d) : d));
+        else resolve(parsed);
+      });
+    });
+    req.on('timeout', () => { req.destroy(); reject(new Error('Provider timeout')); });
+    req.on('error', reject);
+    req.write(payload); req.end();
+  });
+}
+
+async function liveCatalogGames() {
+  if (liveGamesCache.games.length && Date.now() - liveGamesCache.t < 15 * 60_000) return liveGamesCache.games;
+  const raw = await jsonGet(LIVE_CATALOG_RAW);
+  const obj = raw?.games || raw || {};
+  const arr = Array.isArray(obj) ? obj : Object.values(obj);
+  liveGamesCache = { t: Date.now(), games: arr.filter(g => g && (g.id_hash || g.gameId || g.id)) };
+  return liveGamesCache.games;
+}
+function livePlayerName(userId, currency = 'USD') { return `tb_${Number(userId)}_${String(currency || 'USD').toUpperCase()}_tunbet`; }
+function liveUserIdFromUsername(username) {
+  const m = String(username || '').match(/^tb_(\d+)(?:_|$)/);
+  return m ? Number(m[1]) : 0;
+}
+async function spingateCreatePlayer(userId, secret, currency) {
+  const username = livePlayerName(userId, currency);
+  return jsonPost(SPINGATE_API_URL, { api_login: SPINGATE_API_LOGIN, api_password: SPINGATE_API_PASSWORD, method: 'createPlayer', user_username: username, user_password: secret, currency });
+}
+async function spingateLaunch(body) {
+  const userId = Number(body.userId);
+  const gameid = String(body.gameid || body.gameId || body.id_hash || '').trim();
+  const currency = String(body.currency || 'USD').toUpperCase();
+  const secret = String(body.secret || `tb_${userId}_session_2026`);
+  const demo = body.demo === true || body.demo === 1 || body.demo === '1';
+  if (!userId) return { success: false, error: 'Missing userId' };
+  if (!gameid) return { success: false, error: 'Missing gameid' };
+  const homeurl = String(body.homeurl || 'https://hatemzaghwani-cmyk.github.io/live-catalog/');
+  const cashierurl = String(body.cashierurl || 'https://hatemzaghwani-cmyk.github.io/');
+  try { await spingateCreatePlayer(userId, secret, currency); } catch (e) { /* Some providers return an error if player already exists; continue to launch. */ }
+  const method = demo ? 'getGameDemo' : 'getGame';
+  const providerRes = await jsonPost(SPINGATE_API_URL, {
+    api_login: SPINGATE_API_LOGIN,
+    api_password: SPINGATE_API_PASSWORD,
+    method,
+    lang: body.lang || 'en',
+    user_username: livePlayerName(userId, currency),
+    user_password: secret,
+    gameid,
+    homeurl,
+    cashierurl,
+    play_for_fun: demo ? 1 : 0,
+    currency,
+  });
+  const url = providerRes?.response || providerRes?.url || providerRes?.game_url || providerRes?.data?.url || providerRes?.data?.game_url;
+  return { success: !!url, url, provider: 'spingate', method, gameid, currency, raw: providerRes };
+}
+async function liveSoftswissCallback(q) {
+  const username = q.username || q.user || q.player || '';
+  const userId = liveUserIdFromUsername(username);
+  const action = String(q.action || '').toLowerCase();
+  const callId = q.call_id || q.callid || q.transaction_id || q.txid || '';
+  const amountCents = Number(q.amount || q.sum || 0);
+  const amount = Math.round((amountCents / 100) * 100) / 100;
+  if (!userId) return { error: 1, balance: 0 };
+  const rows = await supa('GET', `/users?id=eq.${encodeURIComponent(userId)}&select=balance`);
+  const before = Number(rows?.[0]?.balance || 0);
+  if (action === 'balance' || !action) return { error: 0, balance: Math.round(before * 100) };
+  try {
+    let after = before;
+    if (action === 'debit' || action === 'withdraw' || action === 'bet') after = await updateBalance(userId, 'withdraw', amount);
+    else if (action === 'credit' || action === 'deposit' || action === 'win') after = await updateBalance(userId, 'add', amount);
+    else return { error: 1, balance: Math.round(before * 100) };
+    await supa('POST', '/transactions', { user_id: userId, type: `live_${action}`, amount: (action === 'debit' || action === 'withdraw' || action === 'bet') ? -amount : amount, balance_before: before, balance_after: after, description: `Live provider ${action} ${q.game_id || q.gameid || ''} tx:${callId}` }).catch(() => {});
+    return { error: 0, balance: Math.round(after * 100) };
+  } catch (e) {
+    return { error: 1, balance: Math.round(before * 100) };
+  }
+}
+
+// ═══════════════════════════════════════════════════════
 // Slotopol API adapter (347 games list in frontend)
 // Real balance is kept in Supabase; every spin is atomic withdraw + optional credit.
 // If a dedicated Slotopol Go service is deployed later, this adapter can proxy it via SLOTOPOL_URL.
@@ -1147,6 +1251,16 @@ const server = http.createServer(async (req, res) => {
     } else if (p === '/api/mybets') {
       const userId = body.userId || url.searchParams.get('userId');
       R = await supa('GET', `/sports_bets?user_id=eq.${encodeURIComponent(userId)}&select=*&order=id.desc&limit=80`);
+    } else if (p === '/api/live/games') {
+      const games = await liveCatalogGames();
+      const type = url.searchParams.get('type') || body.type || 'all';
+      let out = games;
+      if (type === 'live') out = games.filter(g => String(g.type || '').toLowerCase() === 'live');
+      R = { success: true, count: out.length, games: out.slice(0, Math.min(Number(url.searchParams.get('limit') || body.limit || 500), 3000)) };
+    } else if (p === '/api/live/launch') {
+      R = await spingateLaunch(body);
+    } else if (p === '/api/slots/softswiss' || p === '/api/live/softswiss') {
+      R = await liveSoftswissCallback(Object.fromEntries(url.searchParams.entries()));
     } else if (p === '/api/settle') {
       // Manual trigger for the resilient settler (auto-grades any finished match's pending bets).
       await reconcilePendingBets();
@@ -1196,7 +1310,7 @@ const server = http.createServer(async (req, res) => {
       });
       R = { results: await Promise.all(candidates.map(tryOne)) };
     } else if (p === '/api/status') {
-      R = { ok: 1, server: 'TunBet Sportsbook v8', uptime: process.uptime() | 0, matches: cache.length, live: cache.filter(m => m.status === 'live').length, upcoming: cache.filter(m => m.status === 'upcoming').length, updatedAt: lastT ? new Date(lastT).toISOString() : null, sports: '/api/matches?sport=all|football|basketball|american-football|baseball|ice-hockey|mixed-martial-arts|tennis', betting: { single: '/api/bet', batch: '/api/betbatch', mybets: '/api/mybets' }, slotopol: { spin: '/api/slotopol/spin', status: '/api/slotopol/status' }, wallet: { balance: '/api/wallet/balance', deduct: '/api/wallet/deduct', credit: '/api/wallet/credit' }, oro: { launch: '/api/oro/launch', token: '/api/oro/token' } };
+      R = { ok: 1, server: 'TunBet Sportsbook v8', uptime: process.uptime() | 0, matches: cache.length, live: cache.filter(m => m.status === 'live').length, upcoming: cache.filter(m => m.status === 'upcoming').length, updatedAt: lastT ? new Date(lastT).toISOString() : null, sports: '/api/matches?sport=all|football|basketball|american-football|baseball|ice-hockey|mixed-martial-arts|tennis', betting: { single: '/api/bet', batch: '/api/betbatch', mybets: '/api/mybets' }, slotopol: { spin: '/api/slotopol/spin', status: '/api/slotopol/status' }, live: { games: '/api/live/games', launch: '/api/live/launch', callback: '/api/slots/softswiss' }, wallet: { balance: '/api/wallet/balance', deduct: '/api/wallet/deduct', credit: '/api/wallet/credit' }, oro: { launch: '/api/oro/launch', token: '/api/oro/token' } };
     } else {
       R = { svc: 'TunBet Sportsbook v8', status: '/api/status', sports: '/api/matches', bet: '/api/betbatch', slotopol: '/api/slotopol/*', wallet: '/api/wallet/*', oro: '/api/oro/*' };
     }
