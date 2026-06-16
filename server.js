@@ -984,6 +984,53 @@ async function placeBetBatch(userId, picks, stake, betType) {
 
 
 // ═══════════════════════════════════════════════════════
+// BetNex public demo API adapter (works with the demo key embedded by BetNex)
+// ═══════════════════════════════════════════════════════
+const BETNEX_API_BASE = (process.env.BETNEX_API_BASE || 'https://livecasinoapi.betnex.co/casino').replace(/\/$/, '');
+const BETNEX_API_KEY = process.env.BETNEX_API_KEY || '696e48e34c48652be77215e3';
+function betnexGet(path) {
+  return new Promise((resolve, reject) => {
+    const u = new URL(BETNEX_API_BASE + path);
+    const req = https.request({ hostname: u.hostname, path: u.pathname + u.search, method: 'GET', timeout: 20000, headers: { 'Accept': 'application/json', 'x-betnex-key': BETNEX_API_KEY, 'User-Agent': 'TunBetBetNexGateway/1.0' } }, (res) => {
+      let d = ''; res.on('data', c => d += c);
+      res.on('end', () => { let parsed = d; try { parsed = d ? JSON.parse(d) : {}; } catch {} ; res.statusCode >= 400 ? reject(new Error(typeof parsed === 'object' ? (parsed.message || parsed.error || d) : d)) : resolve(parsed); });
+    });
+    req.on('timeout', () => { req.destroy(); reject(new Error('BetNex timeout')); });
+    req.on('error', reject); req.end();
+  });
+}
+function betnexPost(path, body) {
+  return new Promise((resolve, reject) => {
+    const u = new URL(BETNEX_API_BASE + path);
+    const payload = JSON.stringify(body || {});
+    const req = https.request({ hostname: u.hostname, path: u.pathname + u.search, method: 'POST', timeout: 25000, headers: { 'Content-Type': 'application/json', 'Accept': 'application/json', 'x-betnex-key': BETNEX_API_KEY, 'User-Agent': 'TunBetBetNexGateway/1.0', 'Content-Length': Buffer.byteLength(payload) } }, (res) => {
+      let d = ''; res.on('data', c => d += c);
+      res.on('end', () => { let parsed = d; try { parsed = d ? JSON.parse(d) : {}; } catch {} ; res.statusCode >= 400 ? reject(new Error(typeof parsed === 'object' ? (parsed.message || parsed.error || d) : d)) : resolve(parsed); });
+    });
+    req.on('timeout', () => { req.destroy(); reject(new Error('BetNex timeout')); });
+    req.on('error', reject); req.write(payload); req.end();
+  });
+}
+async function betnexLaunch(body) {
+  const gameId = String(body.gameId || body.gameid || body.id || '').trim();
+  if (!gameId) return { success: false, error: 'Missing gameId' };
+  const userId = body.userId ? Number(body.userId) : 0;
+  const username = String(body.username || (userId ? `tunbet${userId}` : `tunbet${Date.now()}`)).replace(/[^a-zA-Z0-9]/g, '').slice(0, 32);
+  const payload = {
+    username,
+    gameId,
+    lang: body.lang || 'en',
+    money: Math.max(0, Number(body.money ?? body.balance ?? 1000)),
+    home_url: String(body.home_url || body.homeurl || 'https://hatemzaghwani-cmyk.github.io/betnex-catalog/'),
+    platform: Number(body.platform || 2),
+    currency: String(body.currency || 'INR').toUpperCase(),
+  };
+  const d = await betnexPost('/getgameurl', payload);
+  const url = d?.payload?.game_launch_url || d?.game_launch_url || d?.url;
+  return { success: !!url, url, provider: d?.payload?.provider, gameName: d?.payload?.game_name, expiresIn: d?.payload?.expires_in, raw: d };
+}
+
+// ═══════════════════════════════════════════════════════
 // Spingate / SoftSwiss live-catalog test adapter (GitHub Pages experiment)
 // Credentials intentionally kept server-side; frontend only calls /api/live/*.
 // ═══════════════════════════════════════════════════════
@@ -1251,6 +1298,13 @@ const server = http.createServer(async (req, res) => {
     } else if (p === '/api/mybets') {
       const userId = body.userId || url.searchParams.get('userId');
       R = await supa('GET', `/sports_bets?user_id=eq.${encodeURIComponent(userId)}&select=*&order=id.desc&limit=80`);
+    } else if (p === '/api/betnex/providers') {
+      R = await betnexGet('/getallproviders');
+    } else if (p === '/api/betnex/games') {
+      const provider = url.searchParams.get('provider') || body.provider || 'SPRIBE';
+      R = await betnexGet('/getallgamesandprovider?provider=' + encodeURIComponent(provider));
+    } else if (p === '/api/betnex/launch') {
+      R = await betnexLaunch(body);
     } else if (p === '/api/live/games') {
       const games = await liveCatalogGames();
       const type = url.searchParams.get('type') || body.type || 'all';
@@ -1310,7 +1364,7 @@ const server = http.createServer(async (req, res) => {
       });
       R = { results: await Promise.all(candidates.map(tryOne)) };
     } else if (p === '/api/status') {
-      R = { ok: 1, server: 'TunBet Sportsbook v8', uptime: process.uptime() | 0, matches: cache.length, live: cache.filter(m => m.status === 'live').length, upcoming: cache.filter(m => m.status === 'upcoming').length, updatedAt: lastT ? new Date(lastT).toISOString() : null, sports: '/api/matches?sport=all|football|basketball|american-football|baseball|ice-hockey|mixed-martial-arts|tennis', betting: { single: '/api/bet', batch: '/api/betbatch', mybets: '/api/mybets' }, slotopol: { spin: '/api/slotopol/spin', status: '/api/slotopol/status' }, live: { games: '/api/live/games', launch: '/api/live/launch', callback: '/api/slots/softswiss' }, wallet: { balance: '/api/wallet/balance', deduct: '/api/wallet/deduct', credit: '/api/wallet/credit' }, oro: { launch: '/api/oro/launch', token: '/api/oro/token' } };
+      R = { ok: 1, server: 'TunBet Sportsbook v8', uptime: process.uptime() | 0, matches: cache.length, live: cache.filter(m => m.status === 'live').length, upcoming: cache.filter(m => m.status === 'upcoming').length, updatedAt: lastT ? new Date(lastT).toISOString() : null, sports: '/api/matches?sport=all|football|basketball|american-football|baseball|ice-hockey|mixed-martial-arts|tennis', betting: { single: '/api/bet', batch: '/api/betbatch', mybets: '/api/mybets' }, slotopol: { spin: '/api/slotopol/spin', status: '/api/slotopol/status' }, betnex: { providers: '/api/betnex/providers', games: '/api/betnex/games', launch: '/api/betnex/launch' }, live: { games: '/api/live/games', launch: '/api/live/launch', callback: '/api/slots/softswiss' }, wallet: { balance: '/api/wallet/balance', deduct: '/api/wallet/deduct', credit: '/api/wallet/credit' }, oro: { launch: '/api/oro/launch', token: '/api/oro/token' } };
     } else {
       R = { svc: 'TunBet Sportsbook v8', status: '/api/status', sports: '/api/matches', bet: '/api/betbatch', slotopol: '/api/slotopol/*', wallet: '/api/wallet/*', oro: '/api/oro/*' };
     }
