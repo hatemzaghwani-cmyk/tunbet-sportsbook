@@ -984,6 +984,91 @@ async function placeBetBatch(userId, picks, stake, betType) {
 
 
 // ═══════════════════════════════════════════════════════
+// TunBet Lion Gold Slot — self-hosted 5x3 / 20-payline slot with TND wallet
+// ═══════════════════════════════════════════════════════
+const LION_SYMBOLS = [
+  { k: 'lion', name: 'Lion', weight: 3, pay: { 3: 8, 4: 40, 5: 250 } },
+  { k: 'crown', name: 'Crown', weight: 4, pay: { 3: 5, 4: 25, 5: 120 } },
+  { k: 'diamond', name: 'Diamond', weight: 5, pay: { 3: 4, 4: 18, 5: 90 } },
+  { k: 'gold', name: 'Gold', weight: 7, pay: { 3: 2.5, 4: 10, 5: 45 } },
+  { k: 'scarab', name: 'Scarab', weight: 8, pay: { 3: 2, 4: 8, 5: 35 } },
+  { k: 'snake', name: 'Snake', weight: 10, pay: { 3: 1.2, 4: 5, 5: 20 } },
+  { k: 'coin', name: 'Coin', weight: 12, pay: { 3: 0.8, 4: 3, 5: 12 } },
+  { k: 'wild', name: 'Wild', weight: 3, wild: true, pay: { 3: 10, 4: 50, 5: 300 } },
+  { k: 'scatter', name: 'Scatter', weight: 2, scatter: true, pay: { 3: 5, 4: 25, 5: 150 } },
+];
+const LION_PAYLINES = [
+  [1,1,1,1,1], [0,0,0,0,0], [2,2,2,2,2], [0,1,2,1,0], [2,1,0,1,2],
+  [1,0,0,0,1], [1,2,2,2,1], [0,0,1,2,2], [2,2,1,0,0], [0,1,1,1,0],
+  [2,1,1,1,2], [1,0,1,2,1], [1,2,1,0,1], [0,1,0,1,0], [2,1,2,1,2],
+  [1,1,0,1,1], [1,1,2,1,1], [0,2,0,2,0], [2,0,2,0,2], [0,2,2,2,0],
+];
+function lionRound(n) { return Math.round(Number(n || 0) * 100) / 100; }
+function lionPickSymbol() {
+  const total = LION_SYMBOLS.reduce((a, s) => a + s.weight, 0);
+  let r = crypto.randomInt(0, total);
+  for (const s of LION_SYMBOLS) { if (r < s.weight) return s.k; r -= s.weight; }
+  return 'coin';
+}
+function lionDef(k) { return LION_SYMBOLS.find(s => s.k === k) || LION_SYMBOLS[0]; }
+function lionMakeGrid() {
+  return Array.from({ length: 3 }, () => Array.from({ length: 5 }, () => lionPickSymbol()));
+}
+function lionEvaluate(grid, stake) {
+  const lineBet = stake / LION_PAYLINES.length;
+  let totalWin = 0;
+  const wins = [];
+  for (let i = 0; i < LION_PAYLINES.length; i++) {
+    const line = LION_PAYLINES[i];
+    const cells = line.map((row, col) => grid[row][col]);
+    let base = cells.find(k => k !== 'wild' && k !== 'scatter') || cells[0];
+    if (base === 'scatter') continue;
+    let count = 0;
+    for (const k of cells) { if (k === base || k === 'wild') count++; else break; }
+    if (count >= 3) {
+      const def = lionDef(base);
+      const mult = def.pay[count] || 0;
+      const amount = lionRound(lineBet * mult);
+      if (amount > 0) { totalWin += amount; wins.push({ line: i + 1, pattern: line, symbol: base, count, multiplier: mult, amount }); }
+    }
+  }
+  const scatters = grid.flat().filter(k => k === 'scatter').length;
+  if (scatters >= 3) {
+    const mult = lionDef('scatter').pay[Math.min(5, scatters)] || 0;
+    const amount = lionRound(stake * mult);
+    totalWin += amount;
+    wins.push({ line: 0, symbol: 'scatter', count: scatters, multiplier: mult, amount, bonus: scatters >= 4 ? 'FREE_SPINS_TEASER' : 'SCATTER_PAY' });
+  }
+  return { totalWin: lionRound(Math.min(totalWin, stake * 500)), wins };
+}
+function lionSpinMath(stake) {
+  const grid = lionMakeGrid();
+  const ev = lionEvaluate(grid, stake);
+  return { grid, wins: ev.wins, totalWin: ev.totalWin, paylines: LION_PAYLINES.length, seedHash: crypto.createHash('sha256').update(crypto.randomBytes(32)).digest('hex') };
+}
+async function playLionSlot(body) {
+  const userId = Number(body.userId);
+  const stake = lionRound(body.stake);
+  if (!userId) return { success: false, error: 'Unauthorized' };
+  if (!stake || stake < 0.5) return { success: false, error: 'Min spin 0.50 TND' };
+  if (stake > 200) return { success: false, error: 'Max spin 200 TND' };
+  const users = await supa('GET', `/users?id=eq.${encodeURIComponent(userId)}&select=balance`);
+  if (!Array.isArray(users) || !users.length) return { success: false, error: 'User not found' };
+  const before = lionRound(users[0].balance || 0);
+  if (before < stake) return { success: false, error: 'Insufficient balance', balance: before };
+  let afterBet;
+  try { afterBet = await updateBalance(userId, 'withdraw', stake); }
+  catch (e) { return { success: false, error: e.message || 'Insufficient balance', balance: before }; }
+  const result = lionSpinMath(stake);
+  let finalBalance = afterBet;
+  if (result.totalWin > 0) finalBalance = await updateBalance(userId, 'add', result.totalWin);
+  const txid = `lion_${Date.now()}_${crypto.randomBytes(4).toString('hex')}`;
+  await supa('POST', '/transactions', { user_id: userId, type: 'lion_slot_bet', amount: -stake, balance_before: before, balance_after: afterBet, description: `Lion Gold spin ${stake.toFixed(2)} TND tx:${txid}` }).catch(() => {});
+  if (result.totalWin > 0) await supa('POST', '/transactions', { user_id: userId, type: 'lion_slot_win', amount: result.totalWin, balance_before: afterBet, balance_after: finalBalance, description: `Lion Gold win ${result.totalWin.toFixed(2)} TND tx:${txid}` }).catch(() => {});
+  return { success: true, txid, game: 'TunBet Lion Gold', stake, payout: result.totalWin, profit: lionRound(result.totalWin - stake), balance: finalBalance, result };
+}
+
+// ═══════════════════════════════════════════════════════
 // BetNex public demo API adapter (works with the demo key embedded by BetNex)
 // ═══════════════════════════════════════════════════════
 const BETNEX_API_BASE = (process.env.BETNEX_API_BASE || 'https://livecasinoapi.betnex.co/casino').replace(/\/$/, '');
@@ -1287,7 +1372,11 @@ const server = http.createServer(async (req, res) => {
   const body = await parseBody(req);
   try {
     let R;
-    if (p === '/api/betnex/redirect') {
+    if (p === '/api/lion-slot/spin') {
+      R = await playLionSlot(body);
+    } else if (p === '/api/lion-slot/status') {
+      R = { success: true, game: 'TunBet Lion Gold', reels: 5, rows: 3, paylines: 20, currency: 'TND', minBet: 0.5, maxBet: 200 };
+    } else if (p === '/api/betnex/redirect') {
       const launch = await betnexLaunch({
         gameId: url.searchParams.get('gameId') || url.searchParams.get('gameid'),
         username: url.searchParams.get('username'),
@@ -1396,7 +1485,7 @@ const server = http.createServer(async (req, res) => {
       });
       R = { results: await Promise.all(candidates.map(tryOne)) };
     } else if (p === '/api/status') {
-      R = { ok: 1, server: 'TunBet Sportsbook v8', uptime: process.uptime() | 0, matches: cache.length, live: cache.filter(m => m.status === 'live').length, upcoming: cache.filter(m => m.status === 'upcoming').length, updatedAt: lastT ? new Date(lastT).toISOString() : null, sports: '/api/matches?sport=all|football|basketball|american-football|baseball|ice-hockey|mixed-martial-arts|tennis', betting: { single: '/api/bet', batch: '/api/betbatch', mybets: '/api/mybets' }, slotopol: { spin: '/api/slotopol/spin', status: '/api/slotopol/status' }, betnex: { providers: '/api/betnex/providers', games: '/api/betnex/games', launch: '/api/betnex/launch' }, live: { games: '/api/live/games', launch: '/api/live/launch', callback: '/api/slots/softswiss' }, wallet: { balance: '/api/wallet/balance', deduct: '/api/wallet/deduct', credit: '/api/wallet/credit' }, oro: { launch: '/api/oro/launch', token: '/api/oro/token' } };
+      R = { ok: 1, server: 'TunBet Sportsbook v8', uptime: process.uptime() | 0, matches: cache.length, live: cache.filter(m => m.status === 'live').length, upcoming: cache.filter(m => m.status === 'upcoming').length, updatedAt: lastT ? new Date(lastT).toISOString() : null, sports: '/api/matches?sport=all|football|basketball|american-football|baseball|ice-hockey|mixed-martial-arts|tennis', betting: { single: '/api/bet', batch: '/api/betbatch', mybets: '/api/mybets' }, slotopol: { spin: '/api/slotopol/spin', status: '/api/slotopol/status' }, lionSlot: { spin: '/api/lion-slot/spin', status: '/api/lion-slot/status' }, betnex: { providers: '/api/betnex/providers', games: '/api/betnex/games', launch: '/api/betnex/launch' }, live: { games: '/api/live/games', launch: '/api/live/launch', callback: '/api/slots/softswiss' }, wallet: { balance: '/api/wallet/balance', deduct: '/api/wallet/deduct', credit: '/api/wallet/credit' }, oro: { launch: '/api/oro/launch', token: '/api/oro/token' } };
     } else {
       R = { svc: 'TunBet Sportsbook v8', status: '/api/status', sports: '/api/matches', bet: '/api/betbatch', slotopol: '/api/slotopol/*', wallet: '/api/wallet/*', oro: '/api/oro/*' };
     }
