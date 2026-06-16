@@ -1020,10 +1020,10 @@ async function betnexLaunch(body) {
     username,
     gameId,
     lang: body.lang || 'en',
-    money: Math.max(0, Number(body.money ?? body.balance ?? 1000)),
+    money: Math.max(0, Number(body.money ?? body.balance ?? 100000)),
     home_url: String(body.home_url || body.homeurl || 'https://hatemzaghwani-cmyk.github.io/betnex-catalog/'),
     platform: Number(body.platform || 2),
-    currency: String(body.currency || 'INR').toUpperCase(),
+    currency: String(body.currency || 'TND').toUpperCase(),
   };
   const d = await betnexPost('/getgameurl', payload);
   const url = d?.payload?.game_launch_url || d?.game_launch_url || d?.url;
@@ -1274,8 +1274,8 @@ const server = http.createServer(async (req, res) => {
       const launch = await betnexLaunch({
         gameId: url.searchParams.get('gameId') || url.searchParams.get('gameid'),
         username: url.searchParams.get('username'),
-        money: url.searchParams.get('money') || 1000,
-        currency: url.searchParams.get('currency') || 'INR',
+        money: url.searchParams.get('money') || 100000,
+        currency: url.searchParams.get('currency') || 'TND',
         platform: url.searchParams.get('platform') || 2,
         home_url: url.searchParams.get('home_url') || 'https://hatemzaghwani-cmyk.github.io/betnex-catalog/',
       });
