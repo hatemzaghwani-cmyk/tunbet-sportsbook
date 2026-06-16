@@ -984,6 +984,116 @@ async function placeBetBatch(userId, picks, stake, betType) {
 
 
 // ═══════════════════════════════════════════════════════
+// Zenyx Premium Games adapter — slots imported from public raw game provider catalog
+// Uses TunBet Supabase wallet (TND) with atomic debit/credit.
+// ═══════════════════════════════════════════════════════
+const ZENYX_ASSET_BASE = 'https://raw.githubusercontent.com/Ezechias22/zenyx-games-provider/main/public/assets';
+const ZENYX_GAMES = [
+  { code: 'fruit_classic', name: 'Fruit Classic', theme: 'Classic fruit machine', color: '#f59e0b', volatility: 'MEDIUM', symbols: ['cherry','lemon','orange','watermelon','bell','bar','wild','scatter'] },
+  { code: 'egypt_riches', name: 'Egypt Riches', theme: 'Pharaoh bonus reels', color: '#fbbf24', volatility: 'HIGH', symbols: ['ankh','cobra','coin','pharaoh','pyramid','scarab','wild','scatter'] },
+  { code: 'jungle_wild', name: 'Jungle Wild', theme: 'Wild jungle adventure', color: '#22c55e', volatility: 'MEDIUM', symbols: ['banana','coin','leaf','parrot','snake','tiger','wild','scatter'] },
+  { code: 'luxury_gold', name: 'Luxury Gold', theme: 'VIP gold vault', color: '#eab308', volatility: 'MEDIUM', symbols: ['briefcase','coins','crown','diamond','gold_bar','ring','wild','scatter'] },
+  { code: 'diamond_rush', name: 'Diamond Rush', theme: 'Gemstone reels', color: '#38bdf8', volatility: 'HIGH', symbols: ['blue_sapphire','briefcase','diamond','emerald','ruby','vault_lock','wild','scatter'] },
+  { code: 'fire_reels', name: 'Fire Reels', theme: 'Hot industrial reels', color: '#f97316', volatility: 'HIGH', symbols: ['bell','ember_crystal','explosion','flame_core','gear','steel_bar','wild','scatter'] },
+  { code: 'mystic_fortune', name: 'Mystic Fortune', theme: 'Mystic magic bonus', color: '#a855f7', volatility: 'MEDIUM', symbols: ['amulet','bell','gemstone','key','magic_orb','scroll','wild','scatter'] },
+];
+const ZENYX_PAYLINES = [
+  [1,1,1,1,1], [0,0,0,0,0], [2,2,2,2,2], [0,1,2,1,0], [2,1,0,1,2],
+  [1,0,0,0,1], [1,2,2,2,1], [0,0,1,2,2], [2,2,1,0,0], [0,1,1,1,0],
+  [2,1,1,1,2], [1,0,1,2,1], [1,2,1,0,1], [0,1,0,1,0], [2,1,2,1,2],
+  [1,1,0,1,1], [1,1,2,1,1], [0,2,0,2,0], [2,0,2,0,2], [0,2,2,2,0],
+];
+const ZENYX_PAYTABLE = {
+  scatter: { 3: 4, 4: 20, 5: 100 }, wild: { 3: 2, 4: 10, 5: 60 },
+  diamond: { 3: 2, 4: 12, 5: 80 }, crown: { 3: 2, 4: 10, 5: 60 }, tiger: { 3: 2, 4: 10, 5: 60 }, pharaoh: { 3: 2, 4: 10, 5: 60 },
+  ruby: { 3: 1.5, 4: 8, 5: 45 }, emerald: { 3: 1.4, 4: 7, 5: 40 }, scarab: { 3: 1.4, 4: 7, 5: 40 }, gold_bar: { 3: 1.4, 4: 7, 5: 40 },
+  default: { 3: 0.6, 4: 2.5, 5: 10 },
+};
+function zenyxMoney(n) { return Math.round(Number(n || 0) * 100) / 100; }
+function zenyxGame(code) { return ZENYX_GAMES.find(g => g.code === String(code || '').trim()); }
+function zenyxRand(max) { return crypto.randomInt(0, max); }
+function zenyxPickSymbol(game) {
+  const weighted = [];
+  for (const s of game.symbols) {
+    const w = s === 'wild' ? 3 : s === 'scatter' ? 2 : ['diamond','crown','tiger','pharaoh','ruby','emerald','scarab','gold_bar'].includes(s) ? 5 : 9;
+    for (let i = 0; i < w; i++) weighted.push(s);
+  }
+  return weighted[zenyxRand(weighted.length)];
+}
+function zenyxEvaluate(grid, stake) {
+  const lineBet = stake / ZENYX_PAYLINES.length;
+  const wins = [];
+  let total = 0;
+  for (let idx = 0; idx < ZENYX_PAYLINES.length; idx++) {
+    const line = ZENYX_PAYLINES[idx];
+    const cells = line.map((row, col) => grid[row][col]);
+    let base = cells.find(s => s !== 'wild' && s !== 'scatter') || cells[0];
+    if (base === 'scatter') continue;
+    let count = 0;
+    for (const s of cells) {
+      if (s === base || s === 'wild') count++; else break;
+    }
+    if (count >= 3) {
+      const mult = (ZENYX_PAYTABLE[base] || ZENYX_PAYTABLE.default)[count] || 0;
+      const amount = zenyxMoney(lineBet * mult);
+      if (amount > 0) { total += amount; wins.push({ line: idx + 1, symbol: base, count, multiplier: mult, amount }); }
+    }
+  }
+  const scatters = grid.flat().filter(s => s === 'scatter').length;
+  if (scatters >= 3) {
+    const mult = ZENYX_PAYTABLE.scatter[Math.min(5, scatters)] || 0;
+    const amount = zenyxMoney(stake * mult);
+    total += amount;
+    wins.push({ line: 0, symbol: 'scatter', count: scatters, multiplier: mult, amount, bonus: scatters >= 4 ? 'FREE_SPINS_TEASER' : 'SCATTER_PAY' });
+  }
+  return { totalWin: zenyxMoney(total), wins };
+}
+function zenyxSpinResult(game, stake) {
+  const grid = Array.from({ length: 3 }, () => Array.from({ length: 5 }, () => zenyxPickSymbol(game)));
+  const ev = zenyxEvaluate(grid, stake);
+  const seedHash = crypto.createHash('sha256').update(crypto.randomBytes(32)).digest('hex');
+  return { grid, ...ev, seedHash, reels: 5, rows: 3, paylines: ZENYX_PAYLINES.length };
+}
+async function zenyxSpin(body) {
+  const userId = Number(body.userId);
+  const stake = zenyxMoney(body.stake);
+  const game = zenyxGame(body.gameCode);
+  if (!userId) return { success: false, error: 'Unauthorized' };
+  if (!game) return { success: false, error: 'Unknown Zenyx game' };
+  if (!stake || stake < 0.2) return { success: false, error: 'Min bet 0.20 TND' };
+  if (stake > 500) return { success: false, error: 'Max bet 500 TND' };
+  const users = await supa('GET', `/users?id=eq.${encodeURIComponent(userId)}&select=balance`);
+  if (!Array.isArray(users) || !users.length) return { success: false, error: 'User not found' };
+  const before = zenyxMoney(users[0].balance || 0);
+  if (before < stake) return { success: false, error: 'Insufficient balance', balance: before };
+  let afterBet;
+  try { afterBet = await updateBalance(userId, 'withdraw', stake); }
+  catch (e) { return { success: false, error: e.message || 'Insufficient balance', balance: before }; }
+  const result = zenyxSpinResult(game, stake);
+  let finalBalance = afterBet;
+  if (result.totalWin > 0) finalBalance = await updateBalance(userId, 'add', result.totalWin);
+  const txid = `zenyx_${game.code}_${Date.now()}_${crypto.randomBytes(4).toString('hex')}`;
+  await supa('POST', '/transactions', {
+    user_id: userId, type: 'zenyx_bet', amount: -stake, balance_before: before, balance_after: afterBet,
+    description: `Zenyx ${game.name} stake ${stake.toFixed(2)} TND tx:${txid}`,
+  }).catch(() => {});
+  if (result.totalWin > 0) await supa('POST', '/transactions', {
+    user_id: userId, type: 'zenyx_win', amount: result.totalWin, balance_before: afterBet, balance_after: finalBalance,
+    description: `Zenyx ${game.name} win ${result.totalWin.toFixed(2)} TND tx:${txid}`,
+  }).catch(() => {});
+  return { success: true, provider: 'Zenyx Premium', txid, gameCode: game.code, gameName: game.name, stake, payout: result.totalWin, profit: zenyxMoney(result.totalWin - stake), balance: finalBalance, result };
+}
+function zenyxPublicGames() {
+  return ZENYX_GAMES.map(g => ({
+    ...g,
+    kind: 'SLOT', rtp: 0.96,
+    cover: `${ZENYX_ASSET_BASE}/${g.code}/cover.png`,
+    background: `${ZENYX_ASSET_BASE}/${g.code}/background.jpg`,
+    symbols: g.symbols.map(s => ({ key: s, url: `${ZENYX_ASSET_BASE}/${g.code}/symbols/${s}.png` })),
+  }));
+}
+
+// ═══════════════════════════════════════════════════════
 // Slotopol API adapter (347 games list in frontend)
 // Real balance is kept in Supabase; every spin is atomic withdraw + optional credit.
 // If a dedicated Slotopol Go service is deployed later, this adapter can proxy it via SLOTOPOL_URL.
@@ -1147,6 +1257,10 @@ const server = http.createServer(async (req, res) => {
     } else if (p === '/api/mybets') {
       const userId = body.userId || url.searchParams.get('userId');
       R = await supa('GET', `/sports_bets?user_id=eq.${encodeURIComponent(userId)}&select=*&order=id.desc&limit=80`);
+    } else if (p === '/api/zenyx/games') {
+      R = { success: true, provider: 'Zenyx Premium', games: zenyxPublicGames(), count: ZENYX_GAMES.length };
+    } else if (p === '/api/zenyx/spin') {
+      R = await zenyxSpin(body);
     } else if (p === '/api/settle') {
       // Manual trigger for the resilient settler (auto-grades any finished match's pending bets).
       await reconcilePendingBets();
@@ -1196,7 +1310,7 @@ const server = http.createServer(async (req, res) => {
       });
       R = { results: await Promise.all(candidates.map(tryOne)) };
     } else if (p === '/api/status') {
-      R = { ok: 1, server: 'TunBet Sportsbook v8', uptime: process.uptime() | 0, matches: cache.length, live: cache.filter(m => m.status === 'live').length, upcoming: cache.filter(m => m.status === 'upcoming').length, updatedAt: lastT ? new Date(lastT).toISOString() : null, sports: '/api/matches?sport=all|football|basketball|american-football|baseball|ice-hockey|mixed-martial-arts|tennis', betting: { single: '/api/bet', batch: '/api/betbatch', mybets: '/api/mybets' }, slotopol: { spin: '/api/slotopol/spin', status: '/api/slotopol/status' }, wallet: { balance: '/api/wallet/balance', deduct: '/api/wallet/deduct', credit: '/api/wallet/credit' }, oro: { launch: '/api/oro/launch', token: '/api/oro/token' } };
+      R = { ok: 1, server: 'TunBet Sportsbook v8', uptime: process.uptime() | 0, matches: cache.length, live: cache.filter(m => m.status === 'live').length, upcoming: cache.filter(m => m.status === 'upcoming').length, updatedAt: lastT ? new Date(lastT).toISOString() : null, sports: '/api/matches?sport=all|football|basketball|american-football|baseball|ice-hockey|mixed-martial-arts|tennis', betting: { single: '/api/bet', batch: '/api/betbatch', mybets: '/api/mybets' }, slotopol: { spin: '/api/slotopol/spin', status: '/api/slotopol/status' }, zenyx: { games: '/api/zenyx/games', spin: '/api/zenyx/spin' }, wallet: { balance: '/api/wallet/balance', deduct: '/api/wallet/deduct', credit: '/api/wallet/credit' }, oro: { launch: '/api/oro/launch', token: '/api/oro/token' } };
     } else {
       R = { svc: 'TunBet Sportsbook v8', status: '/api/status', sports: '/api/matches', bet: '/api/betbatch', slotopol: '/api/slotopol/*', wallet: '/api/wallet/*', oro: '/api/oro/*' };
     }
