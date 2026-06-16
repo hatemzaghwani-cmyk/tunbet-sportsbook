@@ -1270,7 +1270,22 @@ const server = http.createServer(async (req, res) => {
   const body = await parseBody(req);
   try {
     let R;
-    if (p === '/api/wallet/balance') {
+    if (p === '/api/betnex/redirect') {
+      const launch = await betnexLaunch({
+        gameId: url.searchParams.get('gameId') || url.searchParams.get('gameid'),
+        username: url.searchParams.get('username'),
+        money: url.searchParams.get('money') || 1000,
+        currency: url.searchParams.get('currency') || 'INR',
+        platform: url.searchParams.get('platform') || 2,
+        home_url: url.searchParams.get('home_url') || 'https://hatemzaghwani-cmyk.github.io/betnex-catalog/',
+      });
+      if (launch && launch.url) {
+        res.writeHead(302, { ...CO, Location: launch.url });
+        return res.end();
+      }
+      res.writeHead(502, CO);
+      return res.end(JSON.stringify({ success: false, error: launch?.error || launch?.raw?.message || 'BetNex launch failed', raw: launch?.raw }));
+    } else if (p === '/api/wallet/balance') {
       const secret = req.headers['x-oroplay-secret'] || body.secret || '';
       R = (secret && secret !== ORO_SEAMLESS_SECRET) ? { success: false, error: "Unauthorized" } : await getBalance(body.username);
     } else if (p === '/api/wallet/deduct') {
