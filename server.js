@@ -1017,7 +1017,9 @@ async function betnexLaunch(body) {
   const userId = body.userId ? Number(body.userId) : 0;
   const username = String(body.username || (userId ? `tunbet${userId}` : `tunbet${Date.now()}`)).replace(/[^a-zA-Z0-9]/g, '').slice(0, 32);
   const requestedCurrency = String(body.currency || body.currencyCode || body.currencycode || 'TND').toUpperCase();
-  const requestedMoney = Math.max(0, Number(body.money ?? body.balance ?? body.amount ?? body.wallet ?? 50));
+  const requestedMoneyTnd = Math.max(0, Number(body.money ?? body.balance ?? body.amount ?? body.wallet ?? 50));
+  // BetNex game sessions expect balance in minor units for some providers; 50 TND => 5000.
+  const requestedMoney = Math.round(requestedMoneyTnd * 100);
   const payload = {
     username,
     gameId,
@@ -1041,10 +1043,6 @@ async function betnexLaunch(body) {
     display_currency: requestedCurrency,
     game_currency: requestedCurrency,
     player_currency: requestedCurrency,
-    demo: 0,
-    is_demo: false,
-    play_for_fun: 0,
-    mode: 'real',
   };
   const d = await betnexPost('/getgameurl', payload);
   const url = d?.payload?.game_launch_url || d?.game_launch_url || d?.url;
