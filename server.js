@@ -13,6 +13,64 @@ const ORO_CLIENT_ID = process.env.ORO_CLIENT_ID || "Hatem1_TND";
 const ORO_CLIENT_SECRET = process.env.ORO_CLIENT_SECRET || "JdYysA2TS7K3xzIYJoOlRn2z9i9XWk57";
 const ORO_SEAMLESS_SECRET = process.env.ORO_SEAMLESS_SECRET || "tunbet_seamless_2026";
 
+const AES_API = "https://api.aesgamingasia.com";
+const AES_TOKEN = process.env.AES_TOKEN || "c441a9f4-0813-4937-90c1-c70d176c48a6";
+
+async function aesCall(path, body) {
+  return new Promise((resolve, reject) => {
+    const payload = JSON.stringify(body || {});
+    const u = new URL(AES_API);
+    const req = https.request({ 
+      hostname: u.hostname, 
+      path: u.pathname + path, 
+      method: 'POST', 
+      headers: { 
+        'Content-Type': 'application/json', 
+        'Authorization': `Bearer ${AES_TOKEN}`,
+        'Content-Length': Buffer.byteLength(payload)
+      }, 
+      timeout: 15000 
+    }, (res) => {
+      let b = '';
+      res.on('data', c => b += c);
+      res.on('end', () => {
+        try { resolve(JSON.parse(b)); } catch { reject(new Error("Invalid AES response")); }
+      });
+    });
+    req.on('error', reject);
+    req.write(payload);
+    req.end();
+  });
+}
+
+async function aesWithdrawAll(userCode) {
+  for (let i = 0; i < 3; i++) {
+    try {
+      const r = await aesCall("/v4/wallet/withdraw-all", { user_code: userCode });
+      if (r?.code === 0) return parseFloat(r.data?.amount ?? 0);
+      if (r?.code !== undefined) return 0;
+    } catch (e) { if (i === 2) throw e; }
+    await new Promise(res => setTimeout(res, 500));
+  }
+  return 0;
+}
+
+async function aesDeposit(userCode, amount) {
+  if (amount <= 0) return true;
+  try {
+    const r = await aesCall("/v4/wallet/deposit", { user_code: userCode, amount });
+    return r?.code === 0;
+  } catch { return false; }
+}
+
+async function aesGetBalance(userCode) {
+  try {
+    const r = await aesCall("/v4/wallet/balance", { user_code: userCode });
+    if (r?.code === 0) return parseFloat(r.data?.balance ?? r.data?.amount ?? 0);
+  } catch {}
+  return null;
+}
+
 process.env.SUPABASE_URL = process.env.SUPABASE_URL || SU;
 process.env.SUPABASE_SERVICE_KEY = process.env.SUPABASE_SERVICE_KEY || SK;
 process.env.SUPA_URL = process.env.SUPA_URL || SU;
@@ -1372,7 +1430,88 @@ const server = http.createServer(async (req, res) => {
   const body = await parseBody(req);
   try {
     let R;
-    if (p === '/api/lion-slot/spin') {
+    if (p === '/api/aes/launch') {
+      const { token, gameCode, providerId } = body;
+      try {
+        // 1. Verify User
+        const pLoad = JSON.parse(Buffer.from(token, 'base64').toString());
+        const userId = pLoad.userId;
+        const users = await supa('GET', `/users?id=eq.${userId}&select=*`);
+        if (!users.length) throw new Error("User not found");
+        const user = users[0];
+
+        // 2. AES Player Code
+        let userCode = user.aes_player_id ? parseInt(user.aes_player_id) : 0;
+        if (!userCode) {
+          const safeName = user.username.replace(/[^a-zA-Z0-9_]/g, "_").substring(0, 50);
+          const cr = await aesCall("/v4/user/create", { name: safeName });
+          if (cr?.code === 0 && cr.data?.user_code) {
+            userCode = cr.data.user_code;
+            await supa('PATCH', `/users?id=eq.${userId}`, { aes_player_id: String(userCode) });
+          } else { throw new Error("فشل إنشاء حساب اللعب"); }
+        }
+
+        // 3. Flush leftover AES funds
+        const leftover = await aesWithdrawAll(userCode);
+        if (leftover > 0) {
+          await updateBalance(userId, 'add', leftover);
+        }
+
+        // 4. Deduct Balance
+        const currentBalRows = await supa('GET', `/users?id=eq.${userId}&select=balance`);
+        const bal = parseFloat(currentBalRows[0]?.balance || 0);
+        if (bal > 0) {
+          await updateBalance(userId, 'withdraw', bal);
+          const depOk = await aesDeposit(userCode, bal);
+          if (!depOk) {
+            await updateBalance(userId, 'add', bal);
+            throw new Error("فشل تحويل الرصيد إلى اللعبة");
+          }
+        }
+
+        // 5. Get URL
+        const r = await aesCall("/v4/game/game-url", {
+          user_code: userCode, provider_id: providerId, game_symbol: gameCode,
+          lang: 1, return_url: "https://tunbet.surge.sh"
+        });
+        const gameUrl = r?.data?.game_url || r?.data?.url;
+        if (r?.code === 0 && gameUrl) {
+          R = { url: gameUrl };
+        } else {
+          throw new Error(r?.message || "تعذر فتح اللعبة");
+        }
+      } catch (e) {
+        R = { error: e.message };
+      }
+    } else if (p === '/api/aes/sync') {
+      const { token } = body;
+      try {
+        const pLoad = JSON.parse(Buffer.from(token, 'base64').toString());
+        const userId = pLoad.userId;
+        const users = await supa('GET', `/users?id=eq.${userId}&select=aes_player_id`);
+        if (!users.length || !users[0].aes_player_id) throw new Error("No AES ID");
+        const userCode = parseInt(users[0].aes_player_id);
+        const recovered = await aesWithdrawAll(userCode);
+        if (recovered > 0) {
+          await updateBalance(userId, 'add', recovered);
+        }
+        R = { ok: true, recovered };
+      } catch (e) {
+        R = { ok: false, error: e.message };
+      }
+    } else if (p === '/api/aes/games') {
+      try {
+        R = await aesCall("/v4/game/all", {});
+      } catch (e) {
+        R = { code: 999, message: "Error fetching games" };
+      }
+    } else if (p === '/api/aes/providers') {
+      try {
+        R = await aesCall("/v4/game/providers", { lang: 1 });
+      } catch (e) {
+        R = { code: 999, message: "Error fetching providers" };
+      }
+    } else if (p === '/api/lion-slot/spin') {
       R = await playLionSlot(body);
     } else if (p === '/api/lion-slot/status') {
       R = { success: true, game: 'TunBet Lion Gold', reels: 5, rows: 3, paylines: 20, currency: 'TND', minBet: 0.5, maxBet: 200 };

@@ -1,0 +1,9 @@
+🚀 TunBet Sportsbook v8 on :4000
+⚽ Sports: /api/matches, /api/betbatch
+🎰 Slotopol: /api/slotopol/{status,spin}
+[2026-06-25T10:38:52.554Z] ESPN feed refresh (74 leagues)...
+✓ ESPN feed: 232 events (0 live, 186 upcoming) — real logos
+[2026-06-25T10:40:00.628Z] ESPN feed refresh (74 leagues)...
+✓ ESPN feed: 232 events (0 live, 186 upcoming) — real logos
+[2026-06-25T10:42:00.779Z] ESPN feed refresh (74 leagues)...
+✓ ESPN feed: 232 events (0 live, 186 upcoming) — real logos
